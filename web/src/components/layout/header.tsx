@@ -5,7 +5,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -57,12 +56,10 @@ export function Header() {
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuLabel>
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium text-sm text-foreground">{user?.username}</span>
-              <span className="text-xs text-muted-foreground capitalize">{user?.role}</span>
-            </div>
-          </DropdownMenuLabel>
+          <div className="px-1.5 py-1.5">
+            <div className="font-medium text-sm text-foreground">{user?.username}</div>
+            <div className="text-xs text-muted-foreground capitalize">{user?.role}</div>
+          </div>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={handleLogout}
