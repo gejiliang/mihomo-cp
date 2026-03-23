@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
 	"github.com/gejiliang/mihomo-cp/internal/store"
@@ -76,13 +75,36 @@ func (h *ProxyHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 // Delete handles DELETE /api/proxies/{id}
+// If the proxy is referenced by groups, it removes the reference from those groups first.
 func (h *ProxyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	refs, _ := h.findRefs(id)
-	if len(refs) > 0 {
-		Error(w, 409, "has_references", "proxy is referenced by: "+strings.Join(refs, ", "))
+	proxy, err := h.proxies.GetByID(id)
+	if err != nil {
+		Error(w, 404, "not_found", "proxy not found")
 		return
 	}
+
+	// Remove this proxy from any groups that reference it
+	groups, _ := h.proxyGroups.List()
+	for _, g := range groups {
+		var members []string
+		_ = json.Unmarshal(g.Members, &members)
+		filtered := make([]string, 0, len(members))
+		changed := false
+		for _, m := range members {
+			if m == proxy.Name {
+				changed = true
+			} else {
+				filtered = append(filtered, m)
+			}
+		}
+		if changed {
+			newMembers, _ := json.Marshal(filtered)
+			g.Members = newMembers
+			_ = h.proxyGroups.Update(g)
+		}
+	}
+
 	if err := h.proxies.Delete(id); err != nil {
 		Error(w, 500, "internal", err.Error())
 		return
