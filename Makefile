@@ -1,16 +1,23 @@
-BINARY := mihomo-cp
-CMD     := ./cmd/mihomo-cp
+.PHONY: build build-frontend build-backend dev test clean docker
 
-.PHONY: build-backend run test clean
+build: build-frontend build-backend
+
+build-frontend:
+	cd web && pnpm install && pnpm build
 
 build-backend:
-	go build -o bin/$(BINARY) $(CMD)
+	go build -o mihomo-cp ./cmd/mihomo-cp
 
-run: build-backend
-	./bin/$(BINARY)
+dev:
+	@echo "Start backend: go run ./cmd/mihomo-cp"
+	@echo "Start frontend: cd web && pnpm dev"
 
 test:
-	go test ./...
+	go test ./... -v
 
 clean:
-	rm -rf bin/
+	rm -f mihomo-cp
+	rm -rf web/dist
+
+docker:
+	docker build -t mihomo-cp .

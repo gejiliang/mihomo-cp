@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"net/http"
 
 	"github.com/gejiliang/mihomo-cp/internal/handler"
 	"github.com/gejiliang/mihomo-cp/internal/middleware"
 	"github.com/gejiliang/mihomo-cp/internal/service"
 	"github.com/gejiliang/mihomo-cp/internal/store"
+	webFS "github.com/gejiliang/mihomo-cp/web"
 )
 
 // Config holds the HTTP server configuration.
@@ -212,6 +214,29 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("POST /api/settings/users", adminOnly(s.settingsHandler.CreateUser))
 	s.mux.Handle("PUT /api/settings/users/{id}", adminOnly(s.settingsHandler.UpdateUser))
 	s.mux.Handle("DELETE /api/settings/users/{id}", adminOnly(s.settingsHandler.DeleteUser))
+
+	// ── Embedded frontend (SPA) ────────────────────────────────────────────────
+	distFS, err := fs.Sub(webFS.DistFS, "dist")
+	if err != nil {
+		panic("failed to create sub filesystem: " + err.Error())
+	}
+	fileServer := http.FileServer(http.FS(distFS))
+
+	// SPA fallback: serve index.html for any path not matched by API or static files.
+	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+		_, statErr := fs.Stat(distFS, path[1:]) // remove leading /
+		if statErr != nil {
+			// File not found — serve index.html for SPA client-side routing.
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	}))
 }
 
 // Start begins listening and serving HTTP requests. It blocks until the server
