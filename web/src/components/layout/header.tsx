@@ -1,4 +1,5 @@
-import { useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { LogOut, User, ChevronDown } from 'lucide-react';
 import {
   DropdownMenu,
@@ -8,11 +9,30 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Badge } from '@/components/ui/badge';
 import { useAuthStore } from '@/stores/auth';
+import { useDraftStore } from '@/stores/draft';
+import { publishApi } from '@/api/publish';
 
 export function Header() {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const { hasChanges, setStatus } = useDraftStore();
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await publishApi.status();
+        setStatus(res.data.has_changes, res.data.running_version);
+      } catch {
+        // silently ignore
+      }
+    };
+
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 30_000);
+    return () => clearInterval(interval);
+  }, [setStatus]);
 
   const handleLogout = () => {
     logout();
@@ -20,7 +40,16 @@ export function Header() {
   };
 
   return (
-    <header className="h-14 border-b flex items-center justify-end px-6 shrink-0 bg-background">
+    <header className="h-14 border-b flex items-center justify-between px-6 shrink-0 bg-background">
+      <div className="flex items-center gap-3">
+        {hasChanges && (
+          <Link to="/publish">
+            <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 border border-amber-500/30 cursor-pointer">
+              Changes pending
+            </Badge>
+          </Link>
+        )}
+      </div>
       <DropdownMenu>
         <DropdownMenuTrigger className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent transition-colors outline-none">
           <User className="h-4 w-4" />
