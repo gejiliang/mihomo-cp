@@ -224,6 +224,7 @@ func (s *ImportService) parseRuleString(ruleStr string, idx int) (model.Rule, er
 		ID:        uuid.New().String(),
 		Type:      ruleType,
 		SortOrder: idx,
+		Params:    json.RawMessage("{}"),
 	}
 
 	if ruleType == "MATCH" {

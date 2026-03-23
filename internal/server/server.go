@@ -68,7 +68,7 @@ func New(cfg Config, db *store.DB) *Server {
 	mihomoSecret := ""
 	if st, err := settingsStore.Get(); err == nil {
 		if st.ExtController != "" {
-			mihomoBaseURL = "http://" + st.ExtController
+			mihomoBaseURL = st.ExtController
 		}
 		mihomoSecret = st.ExtSecret
 	}
