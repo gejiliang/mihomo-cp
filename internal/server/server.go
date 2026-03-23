@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/gejiliang/mihomo-cp/internal/store"
 )
 
 // Config holds the HTTP server configuration.
@@ -17,13 +19,15 @@ type Config struct {
 type Server struct {
 	httpServer *http.Server
 	mux        *http.ServeMux
+	db         *store.DB
 }
 
-// New creates a new Server from the given Config.
-func New(cfg Config) *Server {
+// New creates a new Server from the given Config and database.
+func New(cfg Config, db *store.DB) *Server {
 	mux := http.NewServeMux()
 	s := &Server{
 		mux: mux,
+		db:  db,
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 			Handler: mux,
