@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { XIcon } from 'lucide-react';
+import { XIcon, PlusIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +13,9 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { runtimeApi } from '@/api/runtime';
+import { rulesApi, type Rule } from '@/api/rules';
+import { RuleForm } from '@/components/rules/rule-form';
+import { useT } from '@/i18n';
 
 interface Connection {
   id: string;
@@ -48,10 +51,25 @@ function formatRelativeTime(isoString: string): string {
   return `${diffHr}h ago`;
 }
 
+function isIP(host: string): boolean {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':');
+}
+
+function guessRuleType(host: string): { type: string; payload: string } {
+  if (!host) return { type: 'DOMAIN', payload: '' };
+  if (isIP(host)) {
+    return { type: host.includes(':') ? 'IP-CIDR6' : 'IP-CIDR', payload: host.includes('/') ? host : host.includes(':') ? `${host}/128` : `${host}/32` };
+  }
+  return { type: 'DOMAIN', payload: host };
+}
+
 export function ConnectionTable() {
+  const t = useT();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [ruleFormOpen, setRuleFormOpen] = useState(false);
+  const [ruleInitial, setRuleInitial] = useState<{ type: string; payload: string } | undefined>(undefined);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -87,6 +105,22 @@ export function ConnectionTable() {
     }
   };
 
+  const handleAddRule = (host: string) => {
+    const guess = guessRuleType(host);
+    setRuleInitial(guess);
+    setRuleFormOpen(true);
+  };
+
+  const handleRuleSave = async (data: Partial<Rule>) => {
+    try {
+      await rulesApi.create(data);
+      toast.success(t('rules.created'));
+      setRuleFormOpen(false);
+    } catch {
+      toast.error(t('rules.createFailed'));
+    }
+  };
+
   const filtered = connections.filter((c) => {
     if (!search) return true;
     const term = search.toLowerCase();
@@ -98,35 +132,35 @@ export function ConnectionTable() {
   });
 
   if (loading) {
-    return <div className="text-center py-12 text-muted-foreground">Loading connections...</div>;
+    return <div className="text-center py-12 text-muted-foreground">{t('runtime.loadingConnections')}</div>;
   }
 
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <Input
-          placeholder="Search by host, rule, chain..."
+          placeholder={t('runtime.searchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
-        <span className="text-sm text-muted-foreground">{filtered.length} connections</span>
+        <span className="text-sm text-muted-foreground">{t('runtime.connectionCount', { count: String(filtered.length) })}</span>
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-center py-12 text-muted-foreground">No active connections</div>
+        <div className="text-center py-12 text-muted-foreground">{t('runtime.noConnections')}</div>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Host</TableHead>
-              <TableHead>Network</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Chains</TableHead>
-              <TableHead>Rule</TableHead>
-              <TableHead>Download</TableHead>
-              <TableHead>Upload</TableHead>
-              <TableHead>Time</TableHead>
+              <TableHead>{t('runtime.host')}</TableHead>
+              <TableHead>{t('runtime.network')}</TableHead>
+              <TableHead>{t('common.type')}</TableHead>
+              <TableHead>{t('runtime.chains')}</TableHead>
+              <TableHead>{t('runtime.rule')}</TableHead>
+              <TableHead>{t('runtime.download')}</TableHead>
+              <TableHead>{t('runtime.upload')}</TableHead>
+              <TableHead>{t('overview.time')}</TableHead>
               <TableHead className="w-10"></TableHead>
             </TableRow>
           </TableHeader>
@@ -162,20 +196,39 @@ export function ConnectionTable() {
                   {formatRelativeTime(conn.start)}
                 </TableCell>
                 <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => handleClose(conn.id)}
-                    title="Close connection"
-                  >
-                    <XIcon className="h-3 w-3" />
-                  </Button>
+                  <div className="flex items-center gap-0.5">
+                    {conn.metadata.host && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => handleAddRule(conn.metadata.host)}
+                        title={t('runtime.addRule')}
+                      >
+                        <PlusIcon className="h-3 w-3" />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => handleClose(conn.id)}
+                      title={t('runtime.closeConnection')}
+                    >
+                      <XIcon className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
+
+      <RuleForm
+        open={ruleFormOpen}
+        onOpenChange={setRuleFormOpen}
+        initialValues={ruleInitial}
+        onSave={handleRuleSave}
+      />
     </div>
   );
 }

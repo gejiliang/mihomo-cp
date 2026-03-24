@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { useT } from '@/i18n';
 
 interface LogEntry {
   type: string;
@@ -19,10 +20,11 @@ interface LogViewerProps {
 }
 
 export function LogViewer({ logs }: LogViewerProps) {
+  const t = useT();
   if (logs.length === 0) {
     return (
       <div className="rounded-md bg-muted/50 p-4 text-center text-sm text-muted-foreground">
-        No log entries available. Real-time log streaming requires WebSocket (deferred for MVP).
+        {t('runtime.noLogs')}
       </div>
     );
   }

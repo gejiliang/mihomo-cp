@@ -7,9 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { authApi } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
+import { useT } from '@/i18n';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const t = useT();
   const { setTokens, setUser } = useAuthStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -29,7 +31,7 @@ export default function LoginPage() {
 
       navigate('/');
     } catch {
-      toast.error('Login failed. Please check your credentials.');
+      toast.error(t('login.failed'));
     } finally {
       setLoading(false);
     }
@@ -39,37 +41,37 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Mihomo CP</CardTitle>
-          <p className="text-sm text-muted-foreground">Sign in to your account</p>
+          <CardTitle className="text-2xl">{t('login.title')}</CardTitle>
+          <p className="text-sm text-muted-foreground">{t('login.subtitle')}</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t('login.username')}</Label>
               <Input
                 id="username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="Enter username"
+                placeholder={t('login.usernamePlaceholder')}
                 autoComplete="username"
                 required
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t('login.password')}</Label>
               <Input
                 id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter password"
+                placeholder={t('login.passwordPlaceholder')}
                 autoComplete="current-password"
                 required
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign in'}
+              {loading ? t('login.signingIn') : t('login.signIn')}
             </Button>
           </form>
         </CardContent>

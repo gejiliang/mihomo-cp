@@ -18,6 +18,7 @@ web/dist/
 
 # Build artifacts
 mihomo-cp
+mihomo-cp-linux
 
 # Database files
 *.db

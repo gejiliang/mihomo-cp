@@ -4,7 +4,7 @@ import "time"
 
 type PublishRecord struct {
 	ID         string    `json:"id" db:"id"`
-	Version    int       `json:"version" db:"version"`
+	Version    string    `json:"version" db:"version"`
 	ConfigYAML string    `json:"config_yaml" db:"config_yaml"`
 	DiffText   string    `json:"diff_text" db:"diff_text"`
 	Status     string    `json:"status" db:"status"`

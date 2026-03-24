@@ -17,6 +17,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import type { Proxy } from '@/api/proxies';
+import { useT } from '@/i18n';
 
 type FieldType = 'text' | 'password' | 'number' | 'checkbox' | 'select';
 
@@ -31,54 +32,54 @@ const PROXY_TYPES = ['ss', 'trojan', 'vmess', 'vless', 'http', 'socks5', 'hyster
 
 const PROTOCOL_FIELDS: Record<string, FieldDef[]> = {
   ss: [
-    { key: 'cipher', label: 'Cipher', type: 'select', options: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'] },
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'udp', label: 'UDP', type: 'checkbox' },
+    { key: 'cipher', label: 'proxy.cipher', type: 'select', options: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'] },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'udp', label: 'proxy.udp', type: 'checkbox' },
   ],
   trojan: [
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'sni', label: 'SNI', type: 'text' },
-    { key: 'skip-cert-verify', label: 'Skip Cert Verify', type: 'checkbox' },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'sni', label: 'proxy.sni', type: 'text' },
+    { key: 'skip-cert-verify', label: 'proxy.skipCertVerify', type: 'checkbox' },
   ],
   vmess: [
-    { key: 'uuid', label: 'UUID', type: 'text' },
-    { key: 'alterId', label: 'Alter ID', type: 'number' },
-    { key: 'cipher', label: 'Cipher', type: 'select', options: ['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none'] },
-    { key: 'tls', label: 'TLS', type: 'checkbox' },
-    { key: 'servername', label: 'Server Name', type: 'text' },
-    { key: 'network', label: 'Network', type: 'select', options: ['tcp', 'ws', 'h2', 'grpc'] },
+    { key: 'uuid', label: 'proxy.uuid', type: 'text' },
+    { key: 'alterId', label: 'proxy.alterId', type: 'number' },
+    { key: 'cipher', label: 'proxy.cipher', type: 'select', options: ['auto', 'aes-128-gcm', 'chacha20-poly1305', 'none'] },
+    { key: 'tls', label: 'proxy.tls', type: 'checkbox' },
+    { key: 'servername', label: 'proxy.serverName', type: 'text' },
+    { key: 'network', label: 'proxy.network', type: 'select', options: ['tcp', 'ws', 'h2', 'grpc'] },
   ],
   vless: [
-    { key: 'uuid', label: 'UUID', type: 'text' },
-    { key: 'flow', label: 'Flow', type: 'select', options: ['', 'xtls-rprx-vision'] },
-    { key: 'tls', label: 'TLS', type: 'checkbox' },
-    { key: 'servername', label: 'Server Name', type: 'text' },
-    { key: 'network', label: 'Network', type: 'select', options: ['tcp', 'ws', 'h2', 'grpc'] },
+    { key: 'uuid', label: 'proxy.uuid', type: 'text' },
+    { key: 'flow', label: 'proxy.flow', type: 'select', options: ['', 'xtls-rprx-vision'] },
+    { key: 'tls', label: 'proxy.tls', type: 'checkbox' },
+    { key: 'servername', label: 'proxy.serverName', type: 'text' },
+    { key: 'network', label: 'proxy.network', type: 'select', options: ['tcp', 'ws', 'h2', 'grpc'] },
   ],
   http: [
-    { key: 'username', label: 'Username', type: 'text' },
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'tls', label: 'TLS', type: 'checkbox' },
+    { key: 'username', label: 'proxy.username', type: 'text' },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'tls', label: 'proxy.tls', type: 'checkbox' },
   ],
   socks5: [
-    { key: 'username', label: 'Username', type: 'text' },
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'tls', label: 'TLS', type: 'checkbox' },
-    { key: 'udp', label: 'UDP', type: 'checkbox' },
+    { key: 'username', label: 'proxy.username', type: 'text' },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'tls', label: 'proxy.tls', type: 'checkbox' },
+    { key: 'udp', label: 'proxy.udp', type: 'checkbox' },
   ],
   hysteria2: [
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'obfs', label: 'Obfs', type: 'select', options: ['', 'salamander'] },
-    { key: 'obfs-password', label: 'Obfs Password', type: 'password' },
-    { key: 'sni', label: 'SNI', type: 'text' },
-    { key: 'skip-cert-verify', label: 'Skip Cert Verify', type: 'checkbox' },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'obfs', label: 'proxy.obfs', type: 'select', options: ['', 'salamander'] },
+    { key: 'obfs-password', label: 'proxy.obfsPassword', type: 'password' },
+    { key: 'sni', label: 'proxy.sni', type: 'text' },
+    { key: 'skip-cert-verify', label: 'proxy.skipCertVerify', type: 'checkbox' },
   ],
   tuic: [
-    { key: 'uuid', label: 'UUID', type: 'text' },
-    { key: 'password', label: 'Password', type: 'password' },
-    { key: 'congestion-controller', label: 'Congestion Controller', type: 'select', options: ['cubic', 'bbr', 'new_reno'] },
-    { key: 'sni', label: 'SNI', type: 'text' },
-    { key: 'skip-cert-verify', label: 'Skip Cert Verify', type: 'checkbox' },
+    { key: 'uuid', label: 'proxy.uuid', type: 'text' },
+    { key: 'password', label: 'proxy.password', type: 'password' },
+    { key: 'congestion-controller', label: 'proxy.congestionController', type: 'select', options: ['cubic', 'bbr', 'new_reno'] },
+    { key: 'sni', label: 'proxy.sni', type: 'text' },
+    { key: 'skip-cert-verify', label: 'proxy.skipCertVerify', type: 'checkbox' },
   ],
 };
 
@@ -106,6 +107,7 @@ const DEFAULT_STATE: FormState = {
 };
 
 export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps) {
+  const t = useT();
   const [form, setForm] = useState<FormState>(DEFAULT_STATE);
 
   useEffect(() => {
@@ -158,6 +160,7 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
 
   const renderField = (field: FieldDef) => {
     const value = form.config[field.key];
+    const label = t(field.label as Parameters<typeof t>[0]);
 
     if (field.type === 'checkbox') {
       return (
@@ -169,7 +172,7 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
             onChange={(e) => setConfigField(field.key, e.target.checked)}
             className="h-4 w-4 rounded border border-input"
           />
-          <Label htmlFor={`field-${field.key}`}>{field.label}</Label>
+          <Label htmlFor={`field-${field.key}`}>{label}</Label>
         </div>
       );
     }
@@ -177,18 +180,18 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
     if (field.type === 'select' && field.options) {
       return (
         <div key={field.key} className="space-y-1.5">
-          <Label htmlFor={`field-${field.key}`}>{field.label}</Label>
+          <Label htmlFor={`field-${field.key}`}>{label}</Label>
           <Select
             value={value !== undefined ? String(value) : ''}
             onValueChange={(v) => setConfigField(field.key, v ?? '')}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder={`Select ${field.label}`} />
+              <SelectValue placeholder={label} />
             </SelectTrigger>
             <SelectContent>
               {field.options.map((opt) => (
                 <SelectItem key={opt} value={opt}>
-                  {opt || '(none)'}
+                  {opt || t('proxy.none')}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -200,7 +203,7 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
     if (field.type === 'number') {
       return (
         <div key={field.key} className="space-y-1.5">
-          <Label htmlFor={`field-${field.key}`}>{field.label}</Label>
+          <Label htmlFor={`field-${field.key}`}>{label}</Label>
           <Input
             id={`field-${field.key}`}
             type="number"
@@ -214,7 +217,7 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
     // text or password
     return (
       <div key={field.key} className="space-y-1.5">
-        <Label htmlFor={`field-${field.key}`}>{field.label}</Label>
+        <Label htmlFor={`field-${field.key}`}>{label}</Label>
         <Input
           id={`field-${field.key}`}
           type={field.type === 'password' ? 'password' : 'text'}
@@ -229,32 +232,32 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
     <Dialog open={open} onOpenChange={(o) => onOpenChange(o)}>
       <DialogContent className="sm:max-w-lg overflow-y-auto max-h-[90vh]">
         <DialogHeader>
-          <DialogTitle>{proxy ? 'Edit Proxy' : 'Add Proxy'}</DialogTitle>
+          <DialogTitle>{proxy ? t('proxies.editDialog') : t('proxies.addDialog')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Common fields */}
           <div className="space-y-1.5">
-            <Label htmlFor="proxy-name">Name</Label>
+            <Label htmlFor="proxy-name">{t('common.name')}</Label>
             <Input
               id="proxy-name"
               type="text"
               value={form.name}
               onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              placeholder="Proxy name"
+              placeholder={t('proxies.namePlaceholder')}
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="proxy-type">Type</Label>
+            <Label htmlFor="proxy-type">{t('common.type')}</Label>
             <Select value={form.type} onValueChange={(v) => v && handleTypeChange(v)}>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select type" />
+                <SelectValue placeholder={t('proxies.selectType')} />
               </SelectTrigger>
               <SelectContent>
-                {PROXY_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
+                {PROXY_TYPES.map((pt) => (
+                  <SelectItem key={pt} value={pt}>
+                    {pt}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -262,25 +265,25 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="proxy-server">Server</Label>
+            <Label htmlFor="proxy-server">{t('proxies.server')}</Label>
             <Input
               id="proxy-server"
               type="text"
               value={form.server}
               onChange={(e) => setForm((p) => ({ ...p, server: e.target.value }))}
-              placeholder="hostname or IP"
+              placeholder={t('proxies.serverPlaceholder')}
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="proxy-port">Port</Label>
+            <Label htmlFor="proxy-port">{t('proxies.port')}</Label>
             <Input
               id="proxy-port"
               type="number"
               value={form.port}
               onChange={(e) => setForm((p) => ({ ...p, port: e.target.value }))}
-              placeholder="1-65535"
+              placeholder={t('proxies.portPlaceholder')}
               required
             />
           </div>
@@ -290,9 +293,9 @@ export function ProxyForm({ open, onOpenChange, proxy, onSave }: ProxyFormProps)
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit">{t('common.save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

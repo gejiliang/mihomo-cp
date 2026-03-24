@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import { publishApi, type PublishRecord } from '@/api/publish';
+import { useT } from '@/i18n';
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'success') {
@@ -51,6 +52,7 @@ interface HistoryListProps {
 }
 
 export function HistoryList({ records, onRolledBack }: HistoryListProps) {
+  const t = useT();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [rollbackDialogOpen, setRollbackDialogOpen] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
@@ -63,10 +65,10 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
     setRollingBack(true);
     try {
       await publishApi.rollback();
-      toast.success('Rolled back successfully');
+      toast.success(t('publish.rollbackSuccess'));
       onRolledBack();
     } catch {
-      toast.error('Rollback failed');
+      toast.error(t('publish.rollbackFailed'));
     } finally {
       setRollingBack(false);
     }
@@ -76,10 +78,10 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle>Publish History</CardTitle>
+          <CardTitle>{t('publish.history')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground text-center py-8">No publish history yet.</p>
+          <p className="text-sm text-muted-foreground text-center py-8">{t('publish.noHistory')}</p>
         </CardContent>
       </Card>
     );
@@ -91,18 +93,18 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Publish History</CardTitle>
+        <CardTitle>{t('publish.history')}</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-16">Version</TableHead>
-              <TableHead>Time</TableHead>
-              <TableHead>Operator</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="max-w-xs">Note</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="w-16">{t('overview.version')}</TableHead>
+              <TableHead>{t('overview.time')}</TableHead>
+              <TableHead>{t('overview.operator')}</TableHead>
+              <TableHead>{t('overview.status')}</TableHead>
+              <TableHead className="max-w-xs">{t('overview.note')}</TableHead>
+              <TableHead className="text-right">{t('common.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -133,7 +135,7 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
                         ) : (
                           <ChevronDown className="h-4 w-4" />
                         )}
-                        View
+                        {t('common.view')}
                       </Button>
                       {record.status === 'success' && idx !== latestSuccessIdx && (
                         <Button
@@ -144,7 +146,7 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
                           disabled={rollingBack}
                         >
                           <RotateCcw className="h-3 w-3 mr-1" />
-                          Rollback
+                          {t('publish.rollback')}
                         </Button>
                       )}
                     </div>
@@ -156,7 +158,7 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
                       <div className="space-y-3">
                         {record.error_msg && (
                           <div>
-                            <p className="text-xs font-medium text-destructive mb-1">Error</p>
+                            <p className="text-xs font-medium text-destructive mb-1">{t('publish.error')}</p>
                             <pre className="text-xs font-mono text-destructive/80">
                               {record.error_msg}
                             </pre>
@@ -164,7 +166,7 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
                         )}
                         {record.diff_text && (
                           <div>
-                            <p className="text-xs font-medium text-muted-foreground mb-1">Diff</p>
+                            <p className="text-xs font-medium text-muted-foreground mb-1">{t('publish.diff')}</p>
                             <div className="rounded border bg-background p-3 max-h-48 overflow-auto">
                               <pre className="text-xs font-mono whitespace-pre-wrap">
                                 {record.diff_text.split('\n').map((line, i) => {
@@ -186,7 +188,7 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
                         {record.config_yaml && (
                           <div>
                             <p className="text-xs font-medium text-muted-foreground mb-1">
-                              Config YAML
+                              {t('publish.config')}
                             </p>
                             <div className="rounded border bg-background p-3 max-h-64 overflow-auto">
                               <pre className="text-xs font-mono whitespace-pre-wrap">
@@ -208,8 +210,8 @@ export function HistoryList({ records, onRolledBack }: HistoryListProps) {
       <ConfirmDialog
         open={rollbackDialogOpen}
         onOpenChange={setRollbackDialogOpen}
-        title="Rollback to previous version?"
-        description="This will revert to the last successful configuration. The current running config will be replaced."
+        title={t('publish.rollbackTitle')}
+        description={t('publish.rollbackConfirm')}
         onConfirm={handleRollback}
         variant="destructive"
       />

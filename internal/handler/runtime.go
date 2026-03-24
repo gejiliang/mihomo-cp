@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -24,9 +25,7 @@ func (h *RuntimeHandler) Connections(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }
 
 // CloseConnection handles DELETE /api/runtime/connections/{id}
@@ -46,9 +45,7 @@ func (h *RuntimeHandler) Proxies(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }
 
 // ProxyDelay handles GET /api/runtime/proxies/{name}/delay
@@ -68,9 +65,7 @@ func (h *RuntimeHandler) ProxyDelay(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }
 
 // SwitchProxy handles PUT /api/runtime/proxies/{group}/selected
@@ -97,9 +92,7 @@ func (h *RuntimeHandler) Rules(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }
 
 // Providers handles GET /api/runtime/providers
@@ -109,9 +102,7 @@ func (h *RuntimeHandler) Providers(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }
 
 // RefreshProvider handles PUT /api/runtime/providers/rules/{name}
@@ -131,7 +122,5 @@ func (h *RuntimeHandler) Version(w http.ResponseWriter, r *http.Request) {
 		Error(w, 502, "upstream_error", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, _ = w.Write(data)
+	JSON(w, 200, json.RawMessage(data))
 }

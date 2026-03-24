@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select';
 import type { Rule } from '@/api/rules';
 import { proxyGroupsApi } from '@/api/proxy-groups';
+import { useT } from '@/i18n';
 
 const RULE_TYPES = [
   'DOMAIN',
@@ -43,6 +44,7 @@ interface RuleFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rule?: Rule;
+  initialValues?: { type?: string; payload?: string };
   onSave: (data: Partial<Rule>) => void;
 }
 
@@ -60,7 +62,8 @@ const DEFAULT_STATE: FormState = {
   noResolve: false,
 };
 
-export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
+export function RuleForm({ open, onOpenChange, rule, initialValues, onSave }: RuleFormProps) {
+  const t = useT();
   const [form, setForm] = useState<FormState>(DEFAULT_STATE);
   const [groupNames, setGroupNames] = useState<string[]>([]);
 
@@ -68,7 +71,7 @@ export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
     proxyGroupsApi.list().then((res) => {
       setGroupNames((res.data ?? []).map((g) => g.name));
     }).catch(() => {
-      toast.error('Failed to load proxy groups');
+      toast.error(t('rules.loadGroupsFailed'));
     });
   }, []);
 
@@ -81,11 +84,17 @@ export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
           target: rule.target ?? 'DIRECT',
           noResolve: Boolean(rule.params?.['no-resolve']),
         });
+      } else if (initialValues) {
+        setForm({
+          ...DEFAULT_STATE,
+          type: initialValues.type ?? DEFAULT_STATE.type,
+          payload: initialValues.payload ?? DEFAULT_STATE.payload,
+        });
       } else {
         setForm(DEFAULT_STATE);
       }
     }
-  }, [open, rule]);
+  }, [open, rule, initialValues]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,22 +118,22 @@ export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{rule ? 'Edit Rule' : 'Add Rule'}</DialogTitle>
+          <DialogTitle>{rule ? t('rules.editDialog') : t('rules.addDialog')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="rule-type">Type</Label>
+            <Label htmlFor="rule-type">{t('common.type')}</Label>
             <Select
               value={form.type}
               onValueChange={(v) => v && setForm((p) => ({ ...p, type: v, payload: '' }))}
             >
               <SelectTrigger className="w-full" id="rule-type">
-                <SelectValue placeholder="Select type" />
+                <SelectValue placeholder={t('rules.selectType')} />
               </SelectTrigger>
               <SelectContent>
-                {RULE_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
+                {RULE_TYPES.map((rt) => (
+                  <SelectItem key={rt} value={rt}>
+                    {rt}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -133,31 +142,31 @@ export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
 
           {showPayload && (
             <div className="space-y-1.5">
-              <Label htmlFor="rule-payload">Payload</Label>
+              <Label htmlFor="rule-payload">{t('rules.payload')}</Label>
               <Input
                 id="rule-payload"
                 type="text"
                 value={form.payload}
                 onChange={(e) => setForm((p) => ({ ...p, payload: e.target.value }))}
-                placeholder="e.g. example.com, 192.168.1.0/24"
+                placeholder={t('rules.payloadPlaceholder')}
                 required
               />
             </div>
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="rule-target">Target</Label>
+            <Label htmlFor="rule-target">{t('rules.target')}</Label>
             <Select
               value={form.target}
               onValueChange={(v) => v && setForm((p) => ({ ...p, target: v }))}
             >
               <SelectTrigger className="w-full" id="rule-target">
-                <SelectValue placeholder="Select target" />
+                <SelectValue placeholder={t('rules.selectTarget')} />
               </SelectTrigger>
               <SelectContent>
-                {allTargets.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
+                {allTargets.map((tgt) => (
+                  <SelectItem key={tgt} value={tgt}>
+                    {tgt}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -173,15 +182,15 @@ export function RuleForm({ open, onOpenChange, rule, onSave }: RuleFormProps) {
                 onChange={(e) => setForm((p) => ({ ...p, noResolve: e.target.checked }))}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="rule-no-resolve">No Resolve</Label>
+              <Label htmlFor="rule-no-resolve">{t('rules.noResolve')}</Label>
             </div>
           )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit">{t('common.save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -124,6 +124,53 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ChangePassword handles PUT /api/auth/change-password.
+// Allows the authenticated user to change their own password.
+func (h *AuthHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	if userID == "" {
+		Error(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := DecodeJSON(r, &req); err != nil {
+		Error(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		Error(w, http.StatusBadRequest, "bad_request", "current_password and new_password are required")
+		return
+	}
+
+	user, err := h.users.GetByID(userID)
+	if err != nil {
+		Error(w, http.StatusNotFound, "not_found", "user not found")
+		return
+	}
+
+	if !h.authSvc.VerifyPassword(user.Password, req.CurrentPassword) {
+		Error(w, http.StatusBadRequest, "bad_request", "current password is incorrect")
+		return
+	}
+
+	hashed, err := h.authSvc.HashPassword(req.NewPassword)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "internal_error", "failed to hash password")
+		return
+	}
+	user.Password = hashed
+	if err := h.users.Update(user); err != nil {
+		Error(w, http.StatusInternalServerError, "internal_error", "failed to update password")
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // Me handles GET /api/auth/me.
 // Returns the currently authenticated user's info.
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {

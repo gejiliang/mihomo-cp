@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
@@ -49,6 +50,9 @@ func (h *RuleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule.ID = uuid.New().String()
+	if len(rule.Params) == 0 {
+		rule.Params = json.RawMessage(`{}`)
+	}
 	if err := h.rules.Create(&rule); err != nil {
 		Error(w, 500, "internal", err.Error())
 		return

@@ -21,4 +21,10 @@ export const authApi = {
   refresh: (refreshToken: string) =>
     api.post('auth/refresh', { json: { refresh_token: refreshToken } }).json(),
   me: () => api.get('auth/me').json<MeResponse>(),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api
+      .put('auth/change-password', {
+        json: { current_password: currentPassword, new_password: newPassword },
+      })
+      .json(),
 };

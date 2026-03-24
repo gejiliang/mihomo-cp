@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,8 +44,8 @@ type PublishRequest struct {
 	Note       string
 }
 
-// ValidateWithMihomo writes the YAML to a temp dir, runs `mihomoBin -t -d tmpDir`,
-// and returns the combined output along with any error.
+// ValidateWithMihomo writes the YAML to a temp dir, copies geodata files from
+// the mihomo working dir, runs `mihomoBin -t -d tmpDir`, and returns the output.
 func (s *PublishService) ValidateWithMihomo(yamlContent []byte, mihomoDir, mihomoBin string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "mihomo-validate-*")
 	if err != nil {
@@ -57,12 +58,42 @@ func (s *PublishService) ValidateWithMihomo(yamlContent []byte, mihomoDir, mihom
 		return "", fmt.Errorf("write temp config: %w", err)
 	}
 
-	cmd := exec.Command(mihomoBin, "-t", "-d", tmpDir)
+	// Copy geodata files from mihomo working dir to avoid re-downloading.
+	geoFiles := []string{"GeoIP.dat", "geoip.dat", "GeoSite.dat", "geosite.dat", "country.mmdb", "country-lite.mmdb", "GeoLite2-ASN.mmdb"}
+	for _, name := range geoFiles {
+		src := filepath.Join(mihomoDir, name)
+		if data, err := os.ReadFile(src); err == nil {
+			_ = os.WriteFile(filepath.Join(tmpDir, name), data, 0o644)
+		}
+	}
+
+	// Also copy providers directory if it exists.
+	provSrc := filepath.Join(mihomoDir, "providers")
+	if info, err := os.Stat(provSrc); err == nil && info.IsDir() {
+		provDst := filepath.Join(tmpDir, "providers")
+		_ = os.MkdirAll(provDst, 0o755)
+		entries, _ := os.ReadDir(provSrc)
+		for _, e := range entries {
+			if !e.IsDir() {
+				if data, err := os.ReadFile(filepath.Join(provSrc, e.Name())); err == nil {
+					_ = os.WriteFile(filepath.Join(provDst, e.Name()), data, 0o644)
+				}
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, mihomoBin, "-t", "-d", tmpDir)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
 	cmdErr := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return out.String(), fmt.Errorf("mihomo validation timed out after 30s")
+	}
 	return out.String(), cmdErr
 }
 
@@ -133,8 +164,8 @@ func (s *PublishService) Publish(req PublishRequest) (*model.PublishRecord, erro
 		return nil, fmt.Errorf("write new config: %w", err)
 	}
 
-	// Reload mihomo
-	reloadErr := s.mihomo.ReloadConfig(req.ConfigDir)
+	// Reload mihomo — pass the config file path, not directory
+	reloadErr := s.mihomo.ReloadConfig(req.ConfigPath)
 	if reloadErr != nil {
 		// Restore backup
 		if len(currentContent) > 0 {
@@ -166,7 +197,7 @@ func (s *PublishService) Rollback(configPath, configDir, operator string) (*mode
 		ConfigPath: configPath,
 		ConfigDir:  configDir,
 		Operator:   operator,
-		Note:       fmt.Sprintf("rollback to version %d", last.Version),
+		Note:       fmt.Sprintf("rollback to version %s", last.Version),
 	}
 	return s.Publish(req)
 }

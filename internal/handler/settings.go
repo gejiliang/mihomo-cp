@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
 	"github.com/gejiliang/mihomo-cp/internal/service"
@@ -142,4 +143,57 @@ func (h *SettingsHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	JSON(w, 200, map[string]string{"status": "deleted"})
+}
+
+// GetConfigYAML handles GET /api/settings/config-yaml
+// Returns the raw config draft if it exists, otherwise reads the current config file from disk.
+func (h *SettingsHandler) GetConfigYAML(w http.ResponseWriter, r *http.Request) {
+	st, err := h.settings.Get()
+	if err != nil {
+		Error(w, 500, "internal", err.Error())
+		return
+	}
+
+	if st.RawConfigDraft != "" {
+		JSON(w, 200, map[string]any{"content": st.RawConfigDraft, "source": "draft"})
+		return
+	}
+
+	content, err := os.ReadFile(st.MihomoConfig)
+	if err != nil {
+		Error(w, 500, "internal", "failed to read config file: "+err.Error())
+		return
+	}
+	JSON(w, 200, map[string]any{"content": string(content), "source": "file"})
+}
+
+// UpdateConfigYAML handles PUT /api/settings/config-yaml
+// Saves raw YAML as a draft for later validation and publishing.
+func (h *SettingsHandler) UpdateConfigYAML(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := DecodeJSON(r, &req); err != nil {
+		Error(w, 400, "bad_request", "invalid request body")
+		return
+	}
+	if req.Content == "" {
+		Error(w, 400, "bad_request", "content is required")
+		return
+	}
+	if err := h.settings.SetRawConfigDraft(req.Content); err != nil {
+		Error(w, 500, "internal", err.Error())
+		return
+	}
+	JSON(w, 200, map[string]string{"status": "saved"})
+}
+
+// DeleteConfigYAML handles DELETE /api/settings/config-yaml
+// Clears the raw config draft.
+func (h *SettingsHandler) DeleteConfigYAML(w http.ResponseWriter, r *http.Request) {
+	if err := h.settings.ClearRawConfigDraft(); err != nil {
+		Error(w, 500, "internal", err.Error())
+		return
+	}
+	JSON(w, 200, map[string]string{"status": "cleared"})
 }

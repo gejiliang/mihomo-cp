@@ -53,14 +53,21 @@ func (s *PublishStore) GetByID(id string) (*model.PublishRecord, error) {
 	return &r, nil
 }
 
-// NextVersion returns MAX(version)+1, starting at 1 if no records exist.
-func (s *PublishStore) NextVersion() (int, error) {
-	var version int
-	err := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) + 1 FROM publish_history`).Scan(&version)
+// NextVersion returns a date-prefixed version string like "20260324-1".
+// Counts how many records exist for today's date prefix and increments.
+func (s *PublishStore) NextVersion() (string, error) {
+	today := time.Now().Format("20060102")
+	prefix := today + "-"
+
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM publish_history WHERE version LIKE ?`,
+		prefix+"%",
+	).Scan(&count)
 	if err != nil {
-		return 0, fmt.Errorf("next publish version: %w", err)
+		return "", fmt.Errorf("next publish version: %w", err)
 	}
-	return version, nil
+	return fmt.Sprintf("%s-%d", today, count+1), nil
 }
 
 // GetLastSuccess returns the most recent publish record with status="success".

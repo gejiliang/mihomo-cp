@@ -14,6 +14,7 @@ import { proxiesApi } from '@/api/proxies';
 import { rulesApi } from '@/api/rules';
 import { proxyGroupsApi } from '@/api/proxy-groups';
 import { publishApi, type PublishRecord } from '@/api/publish';
+import { useT } from '@/i18n';
 
 interface StatCard {
   label: string;
@@ -38,6 +39,7 @@ function formatRelTime(iso: string): string {
 }
 
 export default function OverviewPage() {
+  const t = useT();
   const [mihomoVersion, setMihomoVersion] = useState<string | null>(null);
   const [mihomoReachable, setMihomoReachable] = useState<boolean | null>(null);
   const [proxyCount, setProxyCount] = useState<number | null>(null);
@@ -101,40 +103,40 @@ export default function OverviewPage() {
 
   const stats: StatCard[] = [
     {
-      label: 'mihomo Status',
+      label: t('overview.mihomoStatus'),
       value:
         mihomoReachable === null
-          ? 'Checking...'
+          ? t('overview.checking')
           : mihomoReachable
             ? mihomoVersion ?? 'Reachable'
-            : 'Unreachable',
-      sub: mihomoReachable ? 'Running' : mihomoReachable === false ? 'Cannot connect' : undefined,
+            : t('overview.unreachable'),
+      sub: mihomoReachable ? t('overview.running') : mihomoReachable === false ? t('overview.cannotConnect') : undefined,
     },
     {
-      label: 'Proxies',
+      label: t('overview.proxies'),
       value: proxyCount ?? '—',
-      sub: 'configured',
+      sub: t('overview.configured'),
     },
     {
-      label: 'Rules',
+      label: t('nav.rules'),
       value: ruleCount ?? '—',
-      sub: 'configured',
+      sub: t('overview.configured'),
     },
     {
-      label: 'Groups',
+      label: t('overview.groups'),
       value: groupCount ?? '—',
-      sub: 'proxy groups',
+      sub: t('overview.proxyGroups'),
     },
     {
-      label: 'Active Connections',
+      label: t('overview.activeConnections'),
       value: connectionCount ?? '—',
-      sub: mihomoReachable === false ? 'mihomo unreachable' : 'live',
+      sub: mihomoReachable === false ? t('overview.mihomoUnreachable') : t('overview.live'),
     },
   ];
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Overview</h1>
+      <h1 className="text-2xl font-bold">{t('overview.title')}</h1>
 
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
@@ -156,20 +158,20 @@ export default function OverviewPage() {
       {/* Recent publishes */}
       <Card>
         <CardHeader className="border-b pb-3">
-          <CardTitle>Recent Publishes</CardTitle>
+          <CardTitle>{t('overview.recentPublishes')}</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           {recentPublishes.length === 0 ? (
-            <p className="text-center py-8 text-sm text-muted-foreground">No publish history</p>
+            <p className="text-center py-8 text-sm text-muted-foreground">{t('overview.noPublishHistory')}</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Version</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Operator</TableHead>
-                  <TableHead>Note</TableHead>
-                  <TableHead>Time</TableHead>
+                  <TableHead>{t('overview.version')}</TableHead>
+                  <TableHead>{t('overview.status')}</TableHead>
+                  <TableHead>{t('overview.operator')}</TableHead>
+                  <TableHead>{t('overview.note')}</TableHead>
+                  <TableHead>{t('overview.time')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

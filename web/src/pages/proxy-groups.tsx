@@ -24,6 +24,7 @@ import { GroupForm } from '@/components/proxy-groups/group-form';
 import type { ProxyGroup } from '@/api/proxy-groups';
 import { proxyGroupsApi } from '@/api/proxy-groups';
 import { proxiesApi } from '@/api/proxies';
+import { useT } from '@/i18n';
 
 const GROUP_TYPES = ['select', 'fallback', 'url-test', 'load-balance', 'relay'];
 
@@ -47,6 +48,7 @@ function parseMembers(raw: string[] | string | undefined): string[] {
 }
 
 export default function ProxyGroupsPage() {
+  const t = useT();
   const [groups, setGroups] = useState<ProxyGroup[]>([]);
   const [proxyNames, setProxyNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -67,7 +69,7 @@ export default function ProxyGroupsPage() {
       const res = await proxyGroupsApi.list(params);
       setGroups(res.data ?? []);
     } catch {
-      toast.error('Failed to load proxy groups');
+      toast.error(t('proxyGroups.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -109,16 +111,16 @@ export default function ProxyGroupsPage() {
     try {
       if (editingGroup) {
         await proxyGroupsApi.update(editingGroup.id, data);
-        toast.success('Proxy group updated');
+        toast.success(t('proxyGroups.updated'));
       } else {
         await proxyGroupsApi.create(data);
-        toast.success('Proxy group created');
+        toast.success(t('proxyGroups.created'));
       }
       setFormOpen(false);
       setEditingGroup(undefined);
       fetchGroups();
     } catch {
-      toast.error(editingGroup ? 'Failed to update proxy group' : 'Failed to create proxy group');
+      toast.error(editingGroup ? t('proxyGroups.updateFailed') : t('proxyGroups.createFailed'));
     }
   };
 
@@ -128,16 +130,16 @@ export default function ProxyGroupsPage() {
       const refs = res.data ?? [];
       if (refs.length > 0) {
         setConfirmDescription(
-          `This group is referenced by ${refs.length} other group(s): ${refs.join(', ')}. Deleting it may break those groups. Continue?`
+          t('proxyGroups.deleteWithRefs', { count: refs.length, names: refs.join(', ') })
         );
       } else {
         setConfirmDescription(
-          `Are you sure you want to delete "${group.name}"? This action cannot be undone.`
+          t('proxyGroups.deleteConfirm', { name: group.name })
         );
       }
     } catch {
       setConfirmDescription(
-        `Are you sure you want to delete "${group.name}"? This action cannot be undone.`
+        t('proxyGroups.deleteConfirm', { name: group.name })
       );
     }
     setDeletingId(group.id);
@@ -148,10 +150,10 @@ export default function ProxyGroupsPage() {
     if (!deletingId) return;
     try {
       await proxyGroupsApi.delete(deletingId);
-      toast.success('Proxy group deleted');
+      toast.success(t('proxyGroups.deleted'));
       fetchGroups();
     } catch {
-      toast.error('Failed to delete proxy group');
+      toast.error(t('proxyGroups.deleteFailed'));
     } finally {
       setDeletingId(null);
     }
@@ -168,17 +170,17 @@ export default function ProxyGroupsPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Proxy Groups</h1>
+        <h1 className="text-2xl font-bold">{t('proxyGroups.title')}</h1>
         <Button onClick={handleAddClick}>
           <PlusIcon />
-          Add Group
+          {t('proxyGroups.add')}
         </Button>
       </div>
 
       <div className="flex items-center gap-2">
         <Input
           type="text"
-          placeholder="Search groups..."
+          placeholder={t('proxyGroups.searchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
@@ -188,13 +190,13 @@ export default function ProxyGroupsPage() {
           onValueChange={(v) => setTypeFilter(!v || v === '__all__' ? '' : v)}
         >
           <SelectTrigger className="w-40">
-            <SelectValue placeholder="All types" />
+            <SelectValue placeholder={t('common.allTypes')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All types</SelectItem>
-            {GROUP_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {t}
+            <SelectItem value="__all__">{t('common.allTypes')}</SelectItem>
+            {GROUP_TYPES.map((gt) => (
+              <SelectItem key={gt} value={gt}>
+                {gt}
               </SelectItem>
             ))}
           </SelectContent>
@@ -202,19 +204,19 @@ export default function ProxyGroupsPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : groups.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          No proxy groups found. Click "Add Group" to create one.
+          {t('proxyGroups.noGroups')}
         </div>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Members</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{t('common.name')}</TableHead>
+              <TableHead>{t('common.type')}</TableHead>
+              <TableHead>{t('proxyGroups.members')}</TableHead>
+              <TableHead className="text-right">{t('common.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -234,7 +236,7 @@ export default function ProxyGroupsPage() {
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => handleEditClick(group)}
-                        title="Edit"
+                        title={t('common.edit')}
                       >
                         <PencilIcon />
                       </Button>
@@ -242,7 +244,7 @@ export default function ProxyGroupsPage() {
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => handleDeleteClick(group)}
-                        title="Delete"
+                        title={t('common.delete')}
                       >
                         <Trash2Icon />
                       </Button>
@@ -269,7 +271,7 @@ export default function ProxyGroupsPage() {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Delete Proxy Group"
+        title={t('proxyGroups.deleteTitle')}
         description={confirmDescription}
         onConfirm={handleDeleteConfirm}
         variant="destructive"

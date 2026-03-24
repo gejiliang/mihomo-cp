@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { ChevronDownIcon, ChevronRightIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -92,6 +93,7 @@ function FieldRow({ label, htmlFor, children }: FieldRowProps) {
 }
 
 export default function SystemConfigPage() {
+  const t = useT();
   const [config, setConfig] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -102,7 +104,7 @@ export default function SystemConfigPage() {
       const res = await systemConfigApi.get();
       setConfig(res.data ?? {});
     } catch {
-      toast.error('Failed to load system config');
+      toast.error(t('systemConfig.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -119,9 +121,9 @@ export default function SystemConfigPage() {
     setSaving(true);
     try {
       await systemConfigApi.update(config);
-      toast.success('System config saved');
+      toast.success(t('systemConfig.saved'));
     } catch {
-      toast.error('Failed to save system config');
+      toast.error(t('systemConfig.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -130,8 +132,8 @@ export default function SystemConfigPage() {
   if (loading) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold">System Config</h1>
-        <div className="text-center py-12 text-muted-foreground">Loading...</div>
+        <h1 className="text-2xl font-bold">{t('systemConfig.title')}</h1>
+        <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       </div>
     );
   }
@@ -139,14 +141,14 @@ export default function SystemConfigPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">System Config</h1>
+        <h1 className="text-2xl font-bold">{t('systemConfig.title')}</h1>
         <Button onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save'}
+          {saving ? t('common.saving') : t('common.save')}
         </Button>
       </div>
 
       {/* General */}
-      <CollapsibleSection title="General">
+      <CollapsibleSection title={t('systemConfig.general')}>
         <div className="space-y-4">
           <FieldRow label="mixed-port" htmlFor="cfg-mixed-port">
             <Input
@@ -184,7 +186,7 @@ export default function SystemConfigPage() {
                 onChange={(e) => set('allow-lan', e.target.checked)}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="cfg-allow-lan">Allow LAN connections</Label>
+              <Label htmlFor="cfg-allow-lan">{t('systemConfig.allowLan')}</Label>
             </div>
           </FieldRow>
           <FieldRow label="bind-address" htmlFor="cfg-bind-address">
@@ -202,7 +204,7 @@ export default function SystemConfigPage() {
               onValueChange={(v) => set('mode', v)}
             >
               <SelectTrigger className="w-full" id="cfg-mode">
-                <SelectValue placeholder="Select mode" />
+                <SelectValue placeholder={t('systemConfig.selectMode')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="rule">rule</SelectItem>
@@ -217,7 +219,7 @@ export default function SystemConfigPage() {
               onValueChange={(v) => set('log-level', v)}
             >
               <SelectTrigger className="w-full" id="cfg-log-level">
-                <SelectValue placeholder="Select log level" />
+                <SelectValue placeholder={t('systemConfig.selectLogLevel')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="silent">silent</SelectItem>
@@ -237,14 +239,14 @@ export default function SystemConfigPage() {
                 onChange={(e) => set('ipv6', e.target.checked)}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="cfg-ipv6">Enable IPv6</Label>
+              <Label htmlFor="cfg-ipv6">{t('systemConfig.enableIpv6')}</Label>
             </div>
           </FieldRow>
         </div>
       </CollapsibleSection>
 
       {/* External Controller */}
-      <CollapsibleSection title="External Controller">
+      <CollapsibleSection title={t('systemConfig.externalController')}>
         <div className="space-y-4">
           <FieldRow label="external-controller" htmlFor="cfg-ext-ctrl">
             <Input
@@ -269,7 +271,7 @@ export default function SystemConfigPage() {
       </CollapsibleSection>
 
       {/* TUN */}
-      <CollapsibleSection title="TUN" defaultOpen={false}>
+      <CollapsibleSection title={t('systemConfig.tun')} defaultOpen={false}>
         <div className="space-y-4">
           <FieldRow label="tun.enable">
             <div className="flex items-center gap-2 pt-2">
@@ -280,7 +282,7 @@ export default function SystemConfigPage() {
                 onChange={(e) => set('tun.enable', e.target.checked)}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="cfg-tun-enable">Enable TUN</Label>
+              <Label htmlFor="cfg-tun-enable">{t('systemConfig.enableTun')}</Label>
             </div>
           </FieldRow>
           <FieldRow label="tun.stack" htmlFor="cfg-tun-stack">
@@ -289,7 +291,7 @@ export default function SystemConfigPage() {
               onValueChange={(v) => set('tun.stack', v)}
             >
               <SelectTrigger className="w-full" id="cfg-tun-stack">
-                <SelectValue placeholder="Select stack" />
+                <SelectValue placeholder={t('systemConfig.selectStack')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="system">system</SelectItem>
@@ -325,14 +327,14 @@ export default function SystemConfigPage() {
                 onChange={(e) => set('tun.auto-route', e.target.checked)}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="cfg-tun-auto-route">Auto Route</Label>
+              <Label htmlFor="cfg-tun-auto-route">{t('systemConfig.autoRoute')}</Label>
             </div>
           </FieldRow>
         </div>
       </CollapsibleSection>
 
       {/* DNS */}
-      <CollapsibleSection title="DNS" defaultOpen={false}>
+      <CollapsibleSection title={t('systemConfig.dns')} defaultOpen={false}>
         <div className="space-y-4">
           <FieldRow label="dns.enable">
             <div className="flex items-center gap-2 pt-2">
@@ -343,7 +345,7 @@ export default function SystemConfigPage() {
                 onChange={(e) => set('dns.enable', e.target.checked)}
                 className="h-4 w-4 rounded border border-input"
               />
-              <Label htmlFor="cfg-dns-enable">Enable DNS</Label>
+              <Label htmlFor="cfg-dns-enable">{t('systemConfig.enableDns')}</Label>
             </div>
           </FieldRow>
           <FieldRow label="dns.listen" htmlFor="cfg-dns-listen">
@@ -361,7 +363,7 @@ export default function SystemConfigPage() {
               onValueChange={(v) => set('dns.enhanced-mode', v)}
             >
               <SelectTrigger className="w-full" id="cfg-dns-mode">
-                <SelectValue placeholder="Select mode" />
+                <SelectValue placeholder={t('systemConfig.selectMode')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="fake-ip">fake-ip</SelectItem>
@@ -410,7 +412,7 @@ export default function SystemConfigPage() {
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={saving} size="lg">
-          {saving ? 'Saving...' : 'Save Configuration'}
+          {saving ? t('common.saving') : t('systemConfig.saveConfig')}
         </Button>
       </div>
     </div>

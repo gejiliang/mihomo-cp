@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, Trash2Icon } from 'lucide-react';
+import { PlusIcon, PencilIcon, Trash2Icon, FileTextIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Table,
   TableBody,
@@ -43,6 +45,7 @@ interface AppSettings {
 }
 
 function AppSettingsCard() {
+  const t = useT();
   const [settings, setSettings] = useState<AppSettings>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -70,9 +73,9 @@ function AppSettingsCard() {
     setSaving(true);
     try {
       await settingsApi.update(settings);
-      toast.success('Settings saved');
+      toast.success(t('settings.saved'));
     } catch {
-      toast.error('Failed to save settings');
+      toast.error(t('settings.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -82,7 +85,7 @@ function AppSettingsCard() {
     return (
       <Card>
         <CardContent className="py-8 text-center text-muted-foreground text-sm">
-          Loading settings...
+          {t('settings.loadingSettings')}
         </CardContent>
       </Card>
     );
@@ -91,60 +94,60 @@ function AppSettingsCard() {
   return (
     <Card>
       <CardHeader className="border-b pb-3">
-        <CardTitle>App Settings</CardTitle>
+        <CardTitle>{t('settings.appSettings')}</CardTitle>
       </CardHeader>
       <CardContent className="pt-4 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="config-path">mihomo Config Path</Label>
+            <Label htmlFor="config-path">{t('settings.configPath')}</Label>
             <Input
               id="config-path"
               value={settings.mihomo_config_path ?? ''}
               onChange={(e) => handleChange('mihomo_config_path', e.target.value)}
-              placeholder="/etc/mihomo/config.yaml"
+              placeholder={t('settings.configPathPlaceholder')}
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="working-dir">mihomo Working Directory</Label>
+            <Label htmlFor="working-dir">{t('settings.workingDir')}</Label>
             <Input
               id="working-dir"
               value={settings.mihomo_working_dir ?? ''}
               onChange={(e) => handleChange('mihomo_working_dir', e.target.value)}
-              placeholder="/etc/mihomo"
+              placeholder={t('settings.workingDirPlaceholder')}
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="binary-path">mihomo Binary Path</Label>
+            <Label htmlFor="binary-path">{t('settings.binaryPath')}</Label>
             <Input
               id="binary-path"
               value={settings.mihomo_binary_path ?? ''}
               onChange={(e) => handleChange('mihomo_binary_path', e.target.value)}
-              placeholder="/usr/local/bin/mihomo"
+              placeholder={t('settings.binaryPathPlaceholder')}
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="controller-url">External Controller URL</Label>
+            <Label htmlFor="controller-url">{t('settings.controllerUrl')}</Label>
             <Input
               id="controller-url"
               value={settings.external_controller_url ?? ''}
               onChange={(e) => handleChange('external_controller_url', e.target.value)}
-              placeholder="http://127.0.0.1:9090"
+              placeholder={t('settings.controllerUrlPlaceholder')}
             />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="controller-secret">External Controller Secret</Label>
+            <Label htmlFor="controller-secret">{t('settings.controllerSecret')}</Label>
             <Input
               id="controller-secret"
               type="password"
               value={settings.external_controller_secret ?? ''}
               onChange={(e) => handleChange('external_controller_secret', e.target.value)}
-              placeholder="Leave blank if no secret"
+              placeholder={t('settings.controllerSecretPlaceholder')}
             />
           </div>
         </div>
         <div className="flex justify-end">
           <Button onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Settings'}
+            {saving ? t('common.saving') : t('settings.saveSettings')}
           </Button>
         </div>
       </CardContent>
@@ -168,6 +171,7 @@ interface UserDialogProps {
 }
 
 function UserDialog({ open, onOpenChange, editingUser, onSaved }: UserDialogProps) {
+  const t = useT();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('readonly');
@@ -183,11 +187,11 @@ function UserDialog({ open, onOpenChange, editingUser, onSaved }: UserDialogProp
 
   const handleSave = async () => {
     if (!editingUser && !username.trim()) {
-      toast.error('Username is required');
+      toast.error(t('settings.usernameRequired'));
       return;
     }
     if (!editingUser && !password.trim()) {
-      toast.error('Password is required');
+      toast.error(t('settings.passwordRequired'));
       return;
     }
     setSaving(true);
@@ -196,15 +200,15 @@ function UserDialog({ open, onOpenChange, editingUser, onSaved }: UserDialogProp
         const data: any = { role };
         if (password.trim()) data.password = password;
         await settingsApi.updateUser(editingUser.id, data);
-        toast.success('User updated');
+        toast.success(t('settings.userUpdated'));
       } else {
         await settingsApi.createUser({ username: username.trim(), password, role });
-        toast.success('User created');
+        toast.success(t('settings.userCreated'));
       }
       onSaved();
       onOpenChange(false);
     } catch {
-      toast.error(editingUser ? 'Failed to update user' : 'Failed to create user');
+      toast.error(editingUser ? t('settings.userUpdateFailed') : t('settings.userCreateFailed'));
     } finally {
       setSaving(false);
     }
@@ -214,53 +218,53 @@ function UserDialog({ open, onOpenChange, editingUser, onSaved }: UserDialogProp
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{editingUser ? 'Edit User' : 'Add User'}</DialogTitle>
+          <DialogTitle>{editingUser ? t('settings.editUserDialog') : t('settings.addUserDialog')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           {!editingUser && (
             <div className="space-y-1.5">
-              <Label htmlFor="new-username">Username</Label>
+              <Label htmlFor="new-username">{t('settings.username')}</Label>
               <Input
                 id="new-username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="username"
+                placeholder={t('settings.usernamePlaceholder')}
                 autoComplete="off"
               />
             </div>
           )}
           <div className="space-y-1.5">
             <Label htmlFor="new-password">
-              Password{editingUser ? ' (leave blank to keep current)' : ''}
+              {editingUser ? t('settings.passwordEditLabel') : t('settings.passwordLabel')}
             </Label>
             <Input
               id="new-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={editingUser ? 'New password (optional)' : 'Password'}
+              placeholder={editingUser ? t('settings.passwordEditPlaceholder') : t('settings.passwordPlaceholder')}
               autoComplete="new-password"
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-role">Role</Label>
+            <Label htmlFor="new-role">{t('settings.role')}</Label>
             <Select value={role} onValueChange={(v) => { if (v) setRole(v); }}>
               <SelectTrigger id="new-role">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="admin">Admin</SelectItem>
-                <SelectItem value="readonly">Readonly</SelectItem>
+                <SelectItem value="admin">{t('settings.roleAdmin')}</SelectItem>
+                <SelectItem value="readonly">{t('settings.roleReadonly')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving...' : editingUser ? 'Update' : 'Create'}
+            {saving ? t('common.saving') : editingUser ? t('common.update') : t('common.create')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -269,6 +273,7 @@ function UserDialog({ open, onOpenChange, editingUser, onSaved }: UserDialogProp
 }
 
 function UserManagementCard() {
+  const t = useT();
   const currentUser = useAuthStore((s) => s.user);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -304,7 +309,7 @@ function UserManagementCard() {
 
   const handleDeleteClick = (user: User) => {
     if (user.id === currentUser?.id) {
-      toast.error('You cannot delete your own account');
+      toast.error(t('settings.cannotDeleteSelf'));
       return;
     }
     setDeletingId(user.id);
@@ -315,10 +320,10 @@ function UserManagementCard() {
     if (!deletingId) return;
     try {
       await settingsApi.deleteUser(deletingId);
-      toast.success('User deleted');
+      toast.success(t('settings.userDeleted'));
       fetchUsers();
     } catch {
-      toast.error('Failed to delete user');
+      toast.error(t('settings.userDeleteFailed'));
     } finally {
       setDeletingId(null);
     }
@@ -331,25 +336,25 @@ function UserManagementCard() {
     <Card>
       <CardHeader className="border-b pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle>User Management</CardTitle>
+          <CardTitle>{t('settings.userManagement')}</CardTitle>
           <Button size="sm" onClick={handleAddClick}>
             <PlusIcon className="h-4 w-4 mr-1.5" />
-            Add User
+            {t('settings.addUser')}
           </Button>
         </div>
       </CardHeader>
       <CardContent className="pt-0">
         {loading ? (
-          <p className="text-center py-8 text-sm text-muted-foreground">Loading users...</p>
+          <p className="text-center py-8 text-sm text-muted-foreground">{t('settings.loadingUsers')}</p>
         ) : users.length === 0 ? (
-          <p className="text-center py-8 text-sm text-muted-foreground">No users found.</p>
+          <p className="text-center py-8 text-sm text-muted-foreground">{t('settings.noUsers')}</p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Username</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead>{t('settings.username')}</TableHead>
+                <TableHead>{t('settings.role')}</TableHead>
+                <TableHead className="text-right">{t('common.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -358,7 +363,7 @@ function UserManagementCard() {
                   <TableCell className="font-medium">
                     {user.username}
                     {user.id === currentUser?.id && (
-                      <span className="ml-2 text-xs text-muted-foreground">(you)</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{t('settings.you')}</span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -372,7 +377,7 @@ function UserManagementCard() {
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => handleEditClick(user)}
-                        title="Edit"
+                        title={t('common.edit')}
                       >
                         <PencilIcon />
                       </Button>
@@ -380,7 +385,7 @@ function UserManagementCard() {
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => handleDeleteClick(user)}
-                        title="Delete"
+                        title={t('common.delete')}
                         disabled={user.id === currentUser?.id}
                       >
                         <Trash2Icon />
@@ -407,8 +412,8 @@ function UserManagementCard() {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Delete User"
-        description="Are you sure you want to delete this user? This action cannot be undone."
+        title={t('settings.deleteUserTitle')}
+        description={t('settings.deleteUserConfirm')}
         onConfirm={handleDeleteConfirm}
         variant="destructive"
       />
@@ -416,13 +421,110 @@ function UserManagementCard() {
   );
 }
 
+// ─── Config Editor ────────────────────────────────────────────────────────────
+
+function ConfigEditorCard() {
+  const t = useT();
+  const [content, setContent] = useState('');
+  const [source, setSource] = useState<'file' | 'draft'>('file');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  const fetchConfig = useCallback(async () => {
+    try {
+      const res = await settingsApi.getConfigYaml();
+      setContent(res.data.content ?? '');
+      setSource(res.data.source as 'file' | 'draft');
+    } catch {
+      toast.error(t('settings.configLoadFailed'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
+
+  const handleSaveDraft = async () => {
+    setSaving(true);
+    try {
+      await settingsApi.updateConfigYaml(content);
+      setSource('draft');
+      toast.success(t('settings.configSaved'));
+    } catch {
+      toast.error(t('settings.configSaveFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClearDraft = async () => {
+    setClearing(true);
+    try {
+      await settingsApi.deleteConfigYaml();
+      toast.success(t('settings.configDraftCleared'));
+      // Reload from file
+      await fetchConfig();
+    } catch {
+      toast.error(t('settings.configClearFailed'));
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="border-b pb-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileTextIcon className="h-5 w-5 text-muted-foreground" />
+            <CardTitle>{t('settings.configEditor')}</CardTitle>
+          </div>
+          <Badge variant={source === 'draft' ? 'default' : 'secondary'}>
+            {source === 'draft' ? t('settings.draftIndicator') : t('settings.fileIndicator')}
+          </Badge>
+        </div>
+        <p className="text-sm text-muted-foreground mt-1">{t('settings.configEditorDesc')}</p>
+      </CardHeader>
+      <CardContent className="pt-4 space-y-4">
+        {loading ? (
+          <p className="text-center py-8 text-sm text-muted-foreground">{t('settings.configLoading')}</p>
+        ) : (
+          <>
+            <Textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className="font-mono text-sm min-h-[400px] resize-y"
+              spellCheck={false}
+            />
+            <div className="flex items-center gap-3">
+              <Button onClick={handleSaveDraft} disabled={saving}>
+                {saving ? t('common.saving') : t('settings.saveDraft')}
+              </Button>
+              {source === 'draft' && (
+                <Button variant="outline" onClick={handleClearDraft} disabled={clearing}>
+                  {t('settings.clearDraft')}
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Settings Page ────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
+  const t = useT();
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Settings</h1>
+      <h1 className="text-2xl font-bold">{t('settings.title')}</h1>
       <AppSettingsCard />
+      <ConfigEditorCard />
       <UserManagementCard />
     </div>
   );

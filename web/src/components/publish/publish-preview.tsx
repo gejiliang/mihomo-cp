@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { publishApi, type PublishPreview, type ValidationResult } from '@/api/publish';
+import { useT } from '@/i18n';
 
 function DiffView({ diff }: { diff: string }) {
   const lines = diff.split('\n');
@@ -34,6 +35,7 @@ interface PublishPreviewProps {
 }
 
 export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
+  const t = useT();
   const [validating, setValidating] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
@@ -45,12 +47,12 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
       const res = await publishApi.validate();
       setValidation(res.data);
       if (res.data.valid) {
-        toast.success('Configuration is valid');
+        toast.success(t('publish.configValid'));
       } else {
-        toast.error(`Validation failed: ${res.data.errors.length} error(s)`);
+        toast.error(t('publish.validationFailed', { count: String(res.data.errors.length) }));
       }
     } catch {
-      toast.error('Validation failed');
+      toast.error(t('publish.validationError'));
     } finally {
       setValidating(false);
     }
@@ -59,13 +61,17 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
   const handlePublish = async () => {
     setPublishing(true);
     try {
-      await publishApi.publish(note || undefined);
-      toast.success('Published successfully');
-      setNote('');
-      setValidation(null);
+      const res = await publishApi.publish(note || undefined);
+      if (res.data.status === 'failed') {
+        toast.error(`${t('publish.publishFailed')}: ${res.data.error_msg || 'unknown error'}`);
+      } else {
+        toast.success(t('publish.publishSuccess'));
+        setNote('');
+        setValidation(null);
+      }
       onPublished();
     } catch {
-      toast.error('Publish failed');
+      toast.error(t('publish.publishFailed'));
     } finally {
       setPublishing(false);
     }
@@ -75,20 +81,20 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
 
   const validationBadge = () => {
     if (!validation) {
-      return <Badge variant="secondary">Not validated</Badge>;
+      return <Badge variant="secondary">{t('publish.notValidated')}</Badge>;
     }
     if (validation.valid) {
       return (
         <Badge className="bg-green-500/10 text-green-700 dark:text-green-400 hover:bg-green-500/20 border border-green-500/30">
           <CheckCircle2 className="h-3 w-3 mr-1" />
-          Valid
+          {t('publish.valid')}
         </Badge>
       );
     }
     return (
       <Badge variant="destructive">
         <XCircle className="h-3 w-3 mr-1" />
-        Invalid ({validation.errors.length} error{validation.errors.length !== 1 ? 's' : ''})
+        {t('publish.invalid', { count: String(validation.errors.length), s: validation.errors.length !== 1 ? 's' : '' })}
       </Badge>
     );
   };
@@ -97,22 +103,22 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle>Preview & Publish</CardTitle>
+          <CardTitle>{t('publish.previewTitle')}</CardTitle>
           {validationBadge()}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <Tabs defaultValue="diff">
           <TabsList>
-            <TabsTrigger value="diff">Diff</TabsTrigger>
-            <TabsTrigger value="preview">Full YAML</TabsTrigger>
+            <TabsTrigger value="diff">{t('publish.diff')}</TabsTrigger>
+            <TabsTrigger value="preview">{t('publish.fullYaml')}</TabsTrigger>
           </TabsList>
           <TabsContent value="diff">
             <div className="rounded-md border bg-muted/30 p-4 max-h-96 overflow-auto">
               {preview.diff ? (
                 <DiffView diff={preview.diff} />
               ) : (
-                <p className="text-sm text-muted-foreground">No differences</p>
+                <p className="text-sm text-muted-foreground">{t('publish.noDifferences')}</p>
               )}
             </div>
           </TabsContent>
@@ -143,13 +149,13 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
 
         {validation?.output && (
           <div className="rounded-md border bg-muted/30 p-3">
-            <p className="text-xs text-muted-foreground mb-1 font-medium">Validation output</p>
+            <p className="text-xs text-muted-foreground mb-1 font-medium">{t('publish.validationOutput')}</p>
             <pre className="text-xs font-mono whitespace-pre-wrap">{validation.output}</pre>
           </div>
         )}
 
         <Textarea
-          placeholder="Release note (optional)"
+          placeholder={t('publish.releaseNote')}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           rows={2}
@@ -157,13 +163,13 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
 
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={handleValidate} disabled={validating}>
-            {validating ? 'Validating...' : 'Validate'}
+            {validating ? t('publish.validating') : t('publish.validate')}
           </Button>
           <Button onClick={handlePublish} disabled={!canPublish || publishing}>
-            {publishing ? 'Publishing...' : 'Publish'}
+            {publishing ? t('publish.publishing') : t('publish.publish')}
           </Button>
           {!canPublish && validation === null && (
-            <p className="text-sm text-muted-foreground">Validate before publishing</p>
+            <p className="text-sm text-muted-foreground">{t('publish.validateFirst')}</p>
           )}
         </div>
       </CardContent>

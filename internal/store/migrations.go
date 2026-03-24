@@ -91,4 +91,24 @@ var migrations = []string{
 		updated_at      DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	INSERT OR IGNORE INTO app_settings (id) VALUES (1)`,
+
+	// 009: raw config draft column
+	`ALTER TABLE app_settings ADD COLUMN raw_config_draft TEXT NOT NULL DEFAULT ''`,
+
+	// 010: convert publish_history.version from INTEGER to TEXT (date-prefixed)
+	// SQLite allows storing text in INTEGER columns, but we recreate for clarity.
+	`CREATE TABLE publish_history_new (
+		id          TEXT PRIMARY KEY,
+		version     TEXT NOT NULL,
+		config_yaml TEXT NOT NULL,
+		diff_text   TEXT NOT NULL DEFAULT '',
+		status      TEXT NOT NULL,
+		error_msg   TEXT NOT NULL DEFAULT '',
+		operator    TEXT NOT NULL DEFAULT '',
+		note        TEXT NOT NULL DEFAULT '',
+		created_at  DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
+	INSERT INTO publish_history_new SELECT id, CAST(version AS TEXT), config_yaml, diff_text, status, error_msg, operator, note, created_at FROM publish_history;
+	DROP TABLE publish_history;
+	ALTER TABLE publish_history_new RENAME TO publish_history`,
 }

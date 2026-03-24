@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import type { Proxy } from '@/api/proxies';
 import { proxiesApi } from '@/api/proxies';
+import { useT } from '@/i18n';
 
 interface ProxyListProps {
   proxies: Proxy[];
@@ -34,6 +35,7 @@ const TYPE_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
 };
 
 export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListProps) {
+  const t = useT();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDescription, setConfirmDescription] = useState('');
@@ -44,13 +46,13 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
       const refs = res.data ?? [];
       if (refs.length > 0) {
         setConfirmDescription(
-          `This proxy is referenced by ${refs.length} group(s): ${refs.join(', ')}. Deleting it may break those groups. Continue?`
+          t('proxies.deleteWithRefs', { count: refs.length, names: refs.join(', ') })
         );
       } else {
-        setConfirmDescription(`Are you sure you want to delete "${proxy.name}"? This action cannot be undone.`);
+        setConfirmDescription(t('proxies.deleteConfirm', { name: proxy.name }));
       }
     } catch {
-      setConfirmDescription(`Are you sure you want to delete "${proxy.name}"? This action cannot be undone.`);
+      setConfirmDescription(t('proxies.deleteConfirm', { name: proxy.name }));
     }
     setDeletingId(proxy.id);
     setConfirmOpen(true);
@@ -60,10 +62,10 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
     if (!deletingId) return;
     try {
       await proxiesApi.delete(deletingId);
-      toast.success('Proxy deleted');
+      toast.success(t('proxies.deleted'));
       onDeleted();
     } catch {
-      toast.error('Failed to delete proxy');
+      toast.error(t('proxies.deleteFailed'));
     } finally {
       setDeletingId(null);
     }
@@ -72,17 +74,17 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
   const handleCopy = async (proxy: Proxy) => {
     try {
       await proxiesApi.copy(proxy.id);
-      toast.success(`Copied "${proxy.name}"`);
+      toast.success(t('proxies.copied'));
       onCopied();
     } catch {
-      toast.error('Failed to copy proxy');
+      toast.error(t('proxies.copyFailed'));
     }
   };
 
   if (proxies.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No proxies found. Click "Add Proxy" to create one.
+        {t('proxies.noProxies')}
       </div>
     );
   }
@@ -92,10 +94,10 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Server</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead>{t('common.name')}</TableHead>
+            <TableHead>{t('common.type')}</TableHead>
+            <TableHead>{t('proxies.server')}</TableHead>
+            <TableHead className="text-right">{t('common.actions')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -118,7 +120,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => onEdit(proxy)}
-                      title="Edit"
+                      title={t('common.edit')}
                     >
                       <PencilIcon />
                     </Button>
@@ -126,7 +128,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => handleCopy(proxy)}
-                      title="Copy"
+                      title={t('common.copy')}
                     >
                       <CopyIcon />
                     </Button>
@@ -134,7 +136,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => handleDeleteClick(proxy)}
-                      title="Delete"
+                      title={t('common.delete')}
                     >
                       <Trash2Icon />
                     </Button>
@@ -149,7 +151,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied }: ProxyListPro
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Delete Proxy"
+        title={t('proxies.deleteTitle')}
         description={confirmDescription}
         onConfirm={handleDeleteConfirm}
         variant="destructive"

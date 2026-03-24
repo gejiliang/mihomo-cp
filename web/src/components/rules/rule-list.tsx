@@ -23,6 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
 import type { Rule } from '@/api/rules';
 import { rulesApi } from '@/api/rules';
+import { useT } from '@/i18n';
 
 interface SortableRuleRowProps {
   rule: Rule;
@@ -32,6 +33,7 @@ interface SortableRuleRowProps {
 }
 
 function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRowProps) {
+  const t = useT();
   const isMatch = rule.type === 'MATCH';
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: rule.id,
@@ -90,7 +92,7 @@ function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRow
           variant="ghost"
           size="icon-sm"
           onClick={() => onEdit(rule)}
-          title="Edit"
+          title={t('common.edit')}
         >
           <PencilIcon className="h-3.5 w-3.5" />
         </Button>
@@ -98,7 +100,7 @@ function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRow
           variant="ghost"
           size="icon-sm"
           onClick={() => onDeleteClick(rule)}
-          title="Delete"
+          title={t('common.delete')}
         >
           <Trash2Icon className="h-3.5 w-3.5" />
         </Button>
@@ -115,6 +117,7 @@ interface RuleListProps {
 }
 
 export function RuleList({ rules, onEdit, onDeleted, onReorder }: RuleListProps) {
+  const t = useT();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -148,10 +151,10 @@ export function RuleList({ rules, onEdit, onDeleted, onReorder }: RuleListProps)
     if (!deletingId) return;
     try {
       await rulesApi.delete(deletingId);
-      toast.success('Rule deleted');
+      toast.success(t('rules.deleted'));
       onDeleted();
     } catch {
-      toast.error('Failed to delete rule');
+      toast.error(t('rules.deleteFailed'));
     } finally {
       setDeletingId(null);
     }
@@ -160,7 +163,7 @@ export function RuleList({ rules, onEdit, onDeleted, onReorder }: RuleListProps)
   if (rules.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No rules found. Click "Add Rule" to create one.
+        {t('rules.noRules')}
       </div>
     );
   }
@@ -188,8 +191,8 @@ export function RuleList({ rules, onEdit, onDeleted, onReorder }: RuleListProps)
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Delete Rule"
-        description="Are you sure you want to delete this rule? This action cannot be undone."
+        title={t('rules.deleteTitle')}
+        description={t('rules.deleteConfirm')}
         onConfirm={handleDeleteConfirm}
         variant="destructive"
       />

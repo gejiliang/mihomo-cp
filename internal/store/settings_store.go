@@ -20,7 +20,7 @@ func NewSettingsStore(db *DB) *SettingsStore {
 // Get returns the current app settings.
 func (s *SettingsStore) Get() (*model.AppSettings, error) {
 	var settings model.AppSettings
-	err := s.db.Get(&settings, `SELECT id, mihomo_config, mihomo_dir, mihomo_binary, ext_controller, ext_secret, updated_at FROM app_settings WHERE id = 1`)
+	err := s.db.Get(&settings, `SELECT id, mihomo_config, mihomo_dir, mihomo_binary, ext_controller, ext_secret, raw_config_draft, updated_at FROM app_settings WHERE id = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("get app settings: %w", err)
 	}
@@ -36,6 +36,24 @@ func (s *SettingsStore) Update(st *model.AppSettings) error {
 	)
 	if err != nil {
 		return fmt.Errorf("update app settings: %w", err)
+	}
+	return nil
+}
+
+// SetRawConfigDraft saves a raw config YAML draft.
+func (s *SettingsStore) SetRawConfigDraft(yaml string) error {
+	_, err := s.db.Exec(`UPDATE app_settings SET raw_config_draft = ?, updated_at = ? WHERE id = 1`, yaml, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("set raw config draft: %w", err)
+	}
+	return nil
+}
+
+// ClearRawConfigDraft removes the raw config draft.
+func (s *SettingsStore) ClearRawConfigDraft() error {
+	_, err := s.db.Exec(`UPDATE app_settings SET raw_config_draft = '', updated_at = ? WHERE id = 1`, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("clear raw config draft: %w", err)
 	}
 	return nil
 }

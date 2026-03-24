@@ -54,7 +54,14 @@ func NewPublishHandler(
 }
 
 // renderDraft reads all draft data from stores and renders YAML.
+// If a raw config draft exists (from the config editor), it takes precedence.
 func (h *PublishHandler) renderDraft() ([]byte, []model.Proxy, []model.ProxyGroup, []model.Rule, map[string]model.RuleProvider, error) {
+	// Check for raw config draft first
+	st, err := h.settings.Get()
+	if err == nil && st.RawConfigDraft != "" {
+		return []byte(st.RawConfigDraft), nil, nil, nil, nil, nil
+	}
+
 	sysConfig, err := h.configs.Get()
 	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("get system config: %w", err)
@@ -139,7 +146,15 @@ func (h *PublishHandler) Validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	errs := h.validator.Validate(proxySlice, groupSlice, ruleSlice, providerMap)
+	// Skip structural validation when using raw config draft (entities are nil)
+	isRawDraft := proxySlice == nil && groupSlice == nil && ruleSlice == nil && providerMap == nil
+	var errs []service.ValidationError
+	if !isRawDraft {
+		errs = h.validator.Validate(proxySlice, groupSlice, ruleSlice, providerMap)
+	}
+	if errs == nil {
+		errs = []service.ValidationError{}
+	}
 
 	st, err := h.settings.Get()
 	if err != nil {
@@ -147,17 +162,25 @@ func (h *PublishHandler) Validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var mihomoOutput string
-	var mihomoErr error
+	var output string
 	if st.MihomoBinary != "" {
-		mihomoOutput, mihomoErr = h.publishSvc.ValidateWithMihomo(yamlBytes, st.MihomoDir, st.MihomoBinary)
+		output, _ = h.publishSvc.ValidateWithMihomo(yamlBytes, st.MihomoDir, st.MihomoBinary)
+	}
+
+	// valid = no error-level structural issues
+	valid := true
+	for _, e := range errs {
+		if e.Level == "error" {
+			valid = false
+			break
+		}
 	}
 
 	JSON(w, 200, map[string]any{
-		"yaml":           string(yamlBytes),
-		"errors":         errs,
-		"mihomo_output":  mihomoOutput,
-		"mihomo_valid":   mihomoErr == nil,
+		"yaml":   string(yamlBytes),
+		"errors": errs,
+		"output": output,
+		"valid":  valid,
 	})
 }
 
@@ -174,12 +197,15 @@ func (h *PublishHandler) Publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Structural validation — reject if any error-level issues
-	errs := h.validator.Validate(proxySlice, groupSlice, ruleSlice, providerMap)
-	for _, e := range errs {
-		if e.Level == "error" {
-			Error(w, 422, "validation_error", e.Message)
-			return
+	// Structural validation — reject if any error-level issues (skip for raw config drafts)
+	isRawDraft := proxySlice == nil && groupSlice == nil && ruleSlice == nil && providerMap == nil
+	if !isRawDraft {
+		errs := h.validator.Validate(proxySlice, groupSlice, ruleSlice, providerMap)
+		for _, e := range errs {
+			if e.Level == "error" {
+				Error(w, 422, "validation_error", e.Message)
+				return
+			}
 		}
 	}
 
@@ -202,6 +228,11 @@ func (h *PublishHandler) Publish(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error(w, 500, "internal", err.Error())
 		return
+	}
+
+	// Clear raw config draft after successful publish
+	if record.Status == "success" {
+		_ = h.settings.ClearRawConfigDraft()
 	}
 
 	JSON(w, 200, record)
@@ -271,7 +302,7 @@ func (h *PublishHandler) Status(w http.ResponseWriter, r *http.Request) {
 	currentContent, _ := os.ReadFile(st.MihomoConfig)
 	hasChanges := string(currentContent) != string(yamlBytes)
 
-	var runningVersion int
+	var runningVersion string
 	if records, err := h.publishStore.List(1); err == nil && len(records) > 0 {
 		runningVersion = records[0].Version
 	}

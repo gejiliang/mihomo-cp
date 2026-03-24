@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { PlusIcon, PencilIcon, Trash2Icon, RefreshCwIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -68,6 +69,7 @@ interface ProviderFormDialogProps {
 }
 
 function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFormDialogProps) {
+  const t = useT();
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
 
   useEffect(() => {
@@ -90,11 +92,11 @@ function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{provider ? 'Edit Rule Provider' : 'Add Rule Provider'}</DialogTitle>
+          <DialogTitle>{provider ? t('ruleProviders.editDialog') : t('ruleProviders.addDialog')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="rp-name">Name</Label>
+            <Label htmlFor="rp-name">{t('common.name')}</Label>
             <Input
               id="rp-name"
               value={form.name}
@@ -105,7 +107,7 @@ function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFo
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="rp-type">Type</Label>
+            <Label htmlFor="rp-type">{t('common.type')}</Label>
             <Select
               value={form.type}
               onValueChange={(v) => v && setForm((p) => ({ ...p, type: v }))}
@@ -121,7 +123,7 @@ function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFo
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="rp-behavior">Behavior</Label>
+            <Label htmlFor="rp-behavior">{t('ruleProviders.behavior')}</Label>
             <Select
               value={form.behavior}
               onValueChange={(v) => v && setForm((p) => ({ ...p, behavior: v }))}
@@ -140,45 +142,45 @@ function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFo
           {form.type === 'http' && (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="rp-url">URL</Label>
+                <Label htmlFor="rp-url">{t('ruleProviders.url')}</Label>
                 <Input
                   id="rp-url"
                   type="url"
                   value={form.url}
                   onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
-                  placeholder="https://example.com/rules.yaml"
+                  placeholder={t('ruleProviders.urlPlaceholder')}
                   required
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="rp-interval">Interval (seconds)</Label>
+                <Label htmlFor="rp-interval">{t('ruleProviders.intervalLabel')}</Label>
                 <Input
                   id="rp-interval"
                   type="number"
                   value={form.interval}
                   onChange={(e) => setForm((p) => ({ ...p, interval: e.target.value }))}
-                  placeholder="86400"
+                  placeholder={t('ruleProviders.intervalPlaceholder')}
                 />
               </div>
             </>
           )}
 
           <div className="space-y-1.5">
-            <Label htmlFor="rp-path">Path</Label>
+            <Label htmlFor="rp-path">{t('ruleProviders.path')}</Label>
             <Input
               id="rp-path"
               value={form.path}
               onChange={(e) => setForm((p) => ({ ...p, path: e.target.value }))}
-              placeholder="./rules/provider.yaml"
+              placeholder={t('ruleProviders.pathPlaceholder')}
               required={form.type === 'file'}
             />
           </div>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit">{t('common.save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -187,6 +189,7 @@ function ProviderFormDialog({ open, onOpenChange, provider, onSave }: ProviderFo
 }
 
 export default function RuleProvidersPage() {
+  const t = useT();
   const [providers, setProviders] = useState<RuleProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -201,7 +204,7 @@ export default function RuleProvidersPage() {
       const res = await ruleProvidersApi.list();
       setProviders(res.data ?? []);
     } catch {
-      toast.error('Failed to load rule providers');
+      toast.error(t('ruleProviders.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -215,16 +218,16 @@ export default function RuleProvidersPage() {
     try {
       if (editingProvider) {
         await ruleProvidersApi.update(editingProvider.id, data);
-        toast.success('Rule provider updated');
+        toast.success(t('ruleProviders.updated'));
       } else {
         await ruleProvidersApi.create(data);
-        toast.success('Rule provider created');
+        toast.success(t('ruleProviders.created'));
       }
       setFormOpen(false);
       setEditingProvider(undefined);
       fetchProviders();
     } catch {
-      toast.error(editingProvider ? 'Failed to update rule provider' : 'Failed to create rule provider');
+      toast.error(editingProvider ? t('ruleProviders.updateFailed') : t('ruleProviders.createFailed'));
     }
   };
 
@@ -237,10 +240,10 @@ export default function RuleProvidersPage() {
     if (!deletingId) return;
     try {
       await ruleProvidersApi.delete(deletingId);
-      toast.success('Rule provider deleted');
+      toast.success(t('ruleProviders.deleted'));
       fetchProviders();
     } catch {
-      toast.error('Failed to delete rule provider');
+      toast.error(t('ruleProviders.deleteFailed'));
     } finally {
       setDeletingId(null);
     }
@@ -250,9 +253,9 @@ export default function RuleProvidersPage() {
     setRefreshingId(provider.id);
     try {
       await ruleProvidersApi.refresh(provider.id);
-      toast.success(`Refreshed "${provider.name}"`);
+      toast.success(t('ruleProviders.refreshed', { name: provider.name }));
     } catch {
-      toast.error(`Failed to refresh "${provider.name}"`);
+      toast.error(t('ruleProviders.refreshFailed', { name: provider.name }));
     } finally {
       setRefreshingId(null);
     }
@@ -261,27 +264,27 @@ export default function RuleProvidersPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Rule Providers</h1>
+        <h1 className="text-2xl font-bold">{t('ruleProviders.title')}</h1>
         <Button onClick={() => { setEditingProvider(undefined); setFormOpen(true); }}>
           <PlusIcon />
-          Add Provider
+          {t('ruleProviders.add')}
         </Button>
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : providers.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
-          No rule providers found. Click "Add Provider" to create one.
+          {t('ruleProviders.noProviders')}
         </div>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Behavior</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead>{t('common.name')}</TableHead>
+              <TableHead>{t('common.type')}</TableHead>
+              <TableHead>{t('ruleProviders.behavior')}</TableHead>
+              <TableHead className="text-right">{t('common.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -302,7 +305,7 @@ export default function RuleProvidersPage() {
                         size="icon-sm"
                         onClick={() => handleRefresh(provider)}
                         disabled={refreshingId === provider.id}
-                        title="Refresh"
+                        title={t('common.refresh')}
                       >
                         <RefreshCwIcon className={`h-4 w-4 ${refreshingId === provider.id ? 'animate-spin' : ''}`} />
                       </Button>
@@ -311,7 +314,7 @@ export default function RuleProvidersPage() {
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => { setEditingProvider(provider); setFormOpen(true); }}
-                      title="Edit"
+                      title={t('common.edit')}
                     >
                       <PencilIcon className="h-4 w-4" />
                     </Button>
@@ -319,7 +322,7 @@ export default function RuleProvidersPage() {
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => handleDeleteClick(provider)}
-                      title="Delete"
+                      title={t('common.delete')}
                     >
                       <Trash2Icon className="h-4 w-4" />
                     </Button>
@@ -344,8 +347,8 @@ export default function RuleProvidersPage() {
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Delete Rule Provider"
-        description="Are you sure you want to delete this rule provider? This action cannot be undone."
+        title={t('ruleProviders.deleteTitle')}
+        description={t('ruleProviders.deleteConfirm')}
         onConfirm={handleDeleteConfirm}
         variant="destructive"
       />

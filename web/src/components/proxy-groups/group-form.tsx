@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select';
 import { GroupMemberList } from './group-member-list';
 import type { ProxyGroup } from '@/api/proxy-groups';
+import { useT } from '@/i18n';
 
 const GROUP_TYPES = ['select', 'fallback', 'url-test', 'load-balance', 'relay'];
 
@@ -66,6 +67,7 @@ function parseMembers(raw: string[] | string | undefined): string[] {
 }
 
 export function GroupForm({ open, onOpenChange, group, onSave, availableMembers }: GroupFormProps) {
+  const t = useT();
   const [form, setForm] = useState<FormState>(DEFAULT_STATE);
 
   useEffect(() => {
@@ -105,34 +107,34 @@ export function GroupForm({ open, onOpenChange, group, onSave, availableMembers 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg overflow-y-auto max-h-[90vh]">
         <DialogHeader>
-          <DialogTitle>{group ? 'Edit Proxy Group' : 'Add Proxy Group'}</DialogTitle>
+          <DialogTitle>{group ? t('proxyGroups.editDialog') : t('proxyGroups.addDialog')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="group-name">Name</Label>
+            <Label htmlFor="group-name">{t('common.name')}</Label>
             <Input
               id="group-name"
               type="text"
               value={form.name}
               onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-              placeholder="Group name"
+              placeholder={t('proxyGroups.namePlaceholder')}
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="group-type">Type</Label>
+            <Label htmlFor="group-type">{t('common.type')}</Label>
             <Select
               value={form.type}
               onValueChange={(v) => v && setForm((p) => ({ ...p, type: v }))}
             >
               <SelectTrigger className="w-full" id="group-type">
-                <SelectValue placeholder="Select type" />
+                <SelectValue placeholder={t('proxyGroups.selectType')} />
               </SelectTrigger>
               <SelectContent>
-                {GROUP_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
+                {GROUP_TYPES.map((gt) => (
+                  <SelectItem key={gt} value={gt}>
+                    {gt}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -142,23 +144,23 @@ export function GroupForm({ open, onOpenChange, group, onSave, availableMembers 
           {(form.type === 'url-test' || form.type === 'fallback') && (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="group-url">Health Check URL</Label>
+                <Label htmlFor="group-url">{t('proxyGroups.healthCheckUrl')}</Label>
                 <Input
                   id="group-url"
                   type="text"
                   value={form.url}
                   onChange={(e) => setForm((p) => ({ ...p, url: e.target.value }))}
-                  placeholder="http://www.gstatic.com/generate_204"
+                  placeholder={t('proxyGroups.healthCheckUrlPlaceholder')}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="group-interval">Interval (seconds)</Label>
+                <Label htmlFor="group-interval">{t('proxyGroups.interval')}</Label>
                 <Input
                   id="group-interval"
                   type="number"
                   value={form.interval}
                   onChange={(e) => setForm((p) => ({ ...p, interval: e.target.value }))}
-                  placeholder="300"
+                  placeholder={t('proxyGroups.intervalPlaceholder')}
                   min={10}
                 />
               </div>
@@ -167,13 +169,13 @@ export function GroupForm({ open, onOpenChange, group, onSave, availableMembers 
 
           {form.type === 'load-balance' && (
             <div className="space-y-1.5">
-              <Label htmlFor="group-strategy">Strategy</Label>
+              <Label htmlFor="group-strategy">{t('proxyGroups.strategy')}</Label>
               <Select
                 value={form.strategy}
                 onValueChange={(v) => v && setForm((p) => ({ ...p, strategy: v }))}
               >
                 <SelectTrigger className="w-full" id="group-strategy">
-                  <SelectValue placeholder="Select strategy" />
+                  <SelectValue placeholder={t('proxyGroups.selectStrategy')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="consistent-hashing">consistent-hashing</SelectItem>
@@ -184,7 +186,7 @@ export function GroupForm({ open, onOpenChange, group, onSave, availableMembers 
           )}
 
           <div className="space-y-1.5">
-            <Label>Members</Label>
+            <Label>{t('proxyGroups.members')}</Label>
             <GroupMemberList
               members={form.members}
               onMembersChange={(members) => setForm((p) => ({ ...p, members }))}
@@ -194,9 +196,9 @@ export function GroupForm({ open, onOpenChange, group, onSave, availableMembers 
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit">{t('common.save')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

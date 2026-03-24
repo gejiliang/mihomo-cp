@@ -141,6 +141,7 @@ func (s *Server) registerRoutes() {
 
 	// ── Auth ──────────────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/auth/me", protected(s.authHandler.Me))
+	s.mux.Handle("PUT /api/auth/change-password", protected(s.authHandler.ChangePassword))
 
 	// ── Proxies ───────────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/proxies", protected(s.proxyHandler.List))
@@ -209,6 +210,11 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/settings", protected(s.settingsHandler.GetSettings))
 	s.mux.Handle("PUT /api/settings", protected(s.settingsHandler.UpdateSettings))
 
+	// Config YAML editor
+	s.mux.Handle("GET /api/settings/config-yaml", protected(s.settingsHandler.GetConfigYAML))
+	s.mux.Handle("PUT /api/settings/config-yaml", protected(s.settingsHandler.UpdateConfigYAML))
+	s.mux.Handle("DELETE /api/settings/config-yaml", protected(s.settingsHandler.DeleteConfigYAML))
+
 	// User management — admin only
 	s.mux.Handle("GET /api/settings/users", adminOnly(s.settingsHandler.ListUsers))
 	s.mux.Handle("POST /api/settings/users", adminOnly(s.settingsHandler.CreateUser))
@@ -229,8 +235,12 @@ func (s *Server) registerRoutes() {
 			path = "/index.html"
 		}
 		_, statErr := fs.Stat(distFS, path[1:]) // remove leading /
+		isHTML := path == "/index.html" || statErr != nil
+		if isHTML {
+			// Prevent browser from caching index.html so new deploys take effect immediately.
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
 		if statErr != nil {
-			// File not found — serve index.html for SPA client-side routing.
 			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 			return

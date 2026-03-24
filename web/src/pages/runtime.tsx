@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { ConnectionTable } from '@/components/runtime/connection-table';
 import { LogViewer } from '@/components/runtime/log-viewer';
 import { runtimeApi } from '@/api/runtime';
+import { useT } from '@/i18n';
 
 // ─── Proxies Tab ────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ interface ProxyInfo {
 }
 
 function ProxiesTab() {
+  const t = useT();
   const [proxies, setProxies] = useState<Record<string, ProxyInfo>>({});
   const [loading, setLoading] = useState(true);
   const [delays, setDelays] = useState<Record<string, number | null>>({});
@@ -68,9 +70,9 @@ function ProxiesTab() {
         ...prev,
         [group]: { ...prev[group], now: proxy },
       }));
-      toast.success(`Switched to ${proxy}`);
+      toast.success(t('runtime.switchedTo', { name: proxy }));
     } catch {
-      toast.error('Failed to switch proxy');
+      toast.error(t('runtime.switchFailed'));
     } finally {
       setSwitching((prev) => ({ ...prev, [`${group}:${proxy}`]: false }));
     }
@@ -81,7 +83,7 @@ function ProxiesTab() {
     const hist = proxy.history;
     const lastDelay = d !== undefined ? d : hist?.[hist.length - 1]?.delay;
     if (lastDelay == null) return null;
-    if (lastDelay < 0) return <Badge variant="destructive">Timeout</Badge>;
+    if (lastDelay < 0) return <Badge variant="destructive">{t('runtime.timeout')}</Badge>;
     const color =
       lastDelay < 100
         ? 'text-green-600 dark:text-green-400'
@@ -92,7 +94,7 @@ function ProxiesTab() {
   }
 
   if (loading) {
-    return <div className="text-center py-12 text-muted-foreground">Loading proxies...</div>;
+    return <div className="text-center py-12 text-muted-foreground">{t('runtime.loadingProxies')}</div>;
   }
 
   const groups = Object.values(proxies).filter(
@@ -102,7 +104,7 @@ function ProxiesTab() {
   if (groups.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No proxy groups found. Mihomo may not be running.
+        {t('runtime.noProxyGroups')}
       </div>
     );
   }
@@ -118,7 +120,7 @@ function ProxiesTab() {
             </div>
             {group.now && (
               <p className="text-xs text-muted-foreground mt-1">
-                Selected: <span className="font-medium text-foreground">{group.now}</span>
+                {t('runtime.selected')}: <span className="font-medium text-foreground">{group.now}</span>
               </p>
             )}
           </CardHeader>
@@ -149,7 +151,7 @@ function ProxiesTab() {
                         size="icon-sm"
                         onClick={() => handleTestDelay(memberName)}
                         disabled={testingDelay[memberName]}
-                        title="Test delay"
+                        title={t('runtime.testDelay')}
                       >
                         <ZapIcon className="h-3 w-3" />
                       </Button>
@@ -159,7 +161,7 @@ function ProxiesTab() {
                           size="icon-sm"
                           onClick={() => handleSwitch(group.name, memberName)}
                           disabled={switching[`${group.name}:${memberName}`]}
-                          title="Switch to this proxy"
+                          title={t('runtime.switchProxy')}
                         >
                           <CheckIcon className="h-3 w-3" />
                         </Button>
@@ -185,6 +187,7 @@ interface RuntimeRule {
 }
 
 function RulesTab() {
+  const t = useT();
   const [rules, setRules] = useState<RuntimeRule[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -201,12 +204,12 @@ function RulesTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading rules...</div>;
+  if (loading) return <div className="text-center py-12 text-muted-foreground">{t('runtime.loadingRules')}</div>;
 
   if (rules.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No rules found. Mihomo may not be running.
+        {t('runtime.noRules')}
       </div>
     );
   }
@@ -216,9 +219,9 @@ function RulesTab() {
       <table className="w-full text-sm">
         <thead className="bg-muted/50">
           <tr>
-            <th className="px-4 py-2 text-left font-medium text-muted-foreground">Type</th>
-            <th className="px-4 py-2 text-left font-medium text-muted-foreground">Payload</th>
-            <th className="px-4 py-2 text-left font-medium text-muted-foreground">Proxy</th>
+            <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('common.type')}</th>
+            <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('runtime.payload')}</th>
+            <th className="px-4 py-2 text-left font-medium text-muted-foreground">{t('runtime.proxy')}</th>
           </tr>
         </thead>
         <tbody>
@@ -252,6 +255,7 @@ interface Provider {
 }
 
 function ProvidersTab() {
+  const t = useT();
   const [providers, setProviders] = useState<Record<string, Provider>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({});
@@ -280,22 +284,22 @@ function ProvidersTab() {
     setRefreshing((prev) => ({ ...prev, [name]: true }));
     try {
       await runtimeApi.refreshProvider(name);
-      toast.success(`Provider "${name}" refreshed`);
+      toast.success(t('runtime.providerRefreshed', { name }));
       fetchProviders();
     } catch {
-      toast.error(`Failed to refresh "${name}"`);
+      toast.error(t('runtime.providerRefreshFailed', { name }));
     } finally {
       setRefreshing((prev) => ({ ...prev, [name]: false }));
     }
   };
 
-  if (loading) return <div className="text-center py-12 text-muted-foreground">Loading providers...</div>;
+  if (loading) return <div className="text-center py-12 text-muted-foreground">{t('runtime.loadingProviders')}</div>;
 
   const list = Object.values(providers);
   if (list.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        No providers found. Mihomo may not be running.
+        {t('runtime.noProviders')}
       </div>
     );
   }
@@ -311,12 +315,12 @@ function ProvidersTab() {
                 <Badge variant="outline">{provider.type}</Badge>
                 <Badge variant="secondary">{provider.vehicleType}</Badge>
                 {provider.ruleCount != null && (
-                  <span className="text-xs text-muted-foreground">{provider.ruleCount} rules</span>
+                  <span className="text-xs text-muted-foreground">{t('runtime.rules_count', { count: String(provider.ruleCount) })}</span>
                 )}
               </div>
               {provider.updatedAt && (
                 <p className="text-xs text-muted-foreground">
-                  Updated: {new Date(provider.updatedAt).toLocaleString()}
+                  {t('runtime.updated')}: {new Date(provider.updatedAt).toLocaleString()}
                 </p>
               )}
             </div>
@@ -327,7 +331,7 @@ function ProvidersTab() {
               disabled={refreshing[provider.name]}
             >
               <RefreshCwIcon className="h-4 w-4 mr-1.5" />
-              Refresh
+              {t('common.refresh')}
             </Button>
           </CardContent>
         </Card>
@@ -339,17 +343,18 @@ function ProvidersTab() {
 // ─── Runtime Page ─────────────────────────────────────────────────────────────
 
 export default function RuntimePage() {
+  const t = useT();
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Runtime</h1>
+      <h1 className="text-2xl font-bold">{t('runtime.title')}</h1>
 
       <Tabs defaultValue="connections">
         <TabsList>
-          <TabsTrigger value="connections">Connections</TabsTrigger>
-          <TabsTrigger value="proxies">Proxies</TabsTrigger>
-          <TabsTrigger value="rules">Rules</TabsTrigger>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
-          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="connections">{t('runtime.connections')}</TabsTrigger>
+          <TabsTrigger value="proxies">{t('runtime.proxies')}</TabsTrigger>
+          <TabsTrigger value="rules">{t('runtime.rules')}</TabsTrigger>
+          <TabsTrigger value="providers">{t('runtime.providers')}</TabsTrigger>
+          <TabsTrigger value="logs">{t('runtime.logs')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="connections" className="mt-4">

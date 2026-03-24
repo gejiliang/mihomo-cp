@@ -18,7 +18,7 @@ export const runtimeApi = {
       .put(`runtime/proxies/${encodeURIComponent(group)}/selected`, { json: { name: proxy } })
       .json(),
   rules: () => api.get('runtime/rules').json<{ data: any }>(),
-  providers: () => api.get('runtime/providers/rules').json<{ data: any }>(),
+  providers: () => api.get('runtime/providers').json<{ data: any }>(),
   refreshProvider: (name: string) =>
     api.put(`runtime/providers/rules/${encodeURIComponent(name)}`).json(),
   version: () => api.get('runtime/version').json<{ data: any }>(),

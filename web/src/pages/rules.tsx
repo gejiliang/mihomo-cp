@@ -14,6 +14,7 @@ import { RuleList } from '@/components/rules/rule-list';
 import { RuleForm } from '@/components/rules/rule-form';
 import type { Rule } from '@/api/rules';
 import { rulesApi } from '@/api/rules';
+import { useT } from '@/i18n';
 
 const RULE_TYPES = [
   'DOMAIN',
@@ -30,6 +31,7 @@ const RULE_TYPES = [
 ];
 
 export default function RulesPage() {
+  const t = useT();
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -46,7 +48,7 @@ export default function RulesPage() {
       const res = await rulesApi.list(params);
       setRules(res.data ?? []);
     } catch {
-      toast.error('Failed to load rules');
+      toast.error(t('rules.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -70,16 +72,16 @@ export default function RulesPage() {
     try {
       if (editingRule) {
         await rulesApi.update(editingRule.id, data);
-        toast.success('Rule updated');
+        toast.success(t('rules.updated'));
       } else {
         await rulesApi.create(data);
-        toast.success('Rule created');
+        toast.success(t('rules.created'));
       }
       setFormOpen(false);
       setEditingRule(undefined);
       fetchRules();
     } catch {
-      toast.error(editingRule ? 'Failed to update rule' : 'Failed to create rule');
+      toast.error(editingRule ? t('rules.updateFailed') : t('rules.createFailed'));
     }
   };
 
@@ -88,7 +90,7 @@ export default function RulesPage() {
     try {
       await rulesApi.reorder(reorderedRules.map((r) => r.id));
     } catch {
-      toast.error('Failed to save rule order');
+      toast.error(t('rules.orderSaveFailed'));
       fetchRules();
     }
   };
@@ -98,24 +100,24 @@ export default function RulesPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Rules</h1>
+        <h1 className="text-2xl font-bold">{t('rules.title')}</h1>
         <Button onClick={handleAddClick}>
           <PlusIcon />
-          Add Rule
+          {t('rules.add')}
         </Button>
       </div>
 
       {!loading && rules.length > 0 && !hasMatchRule && (
         <div className="flex items-center gap-2 rounded-md border border-yellow-400 bg-yellow-50 px-4 py-3 text-sm text-yellow-800 dark:border-yellow-600 dark:bg-yellow-950 dark:text-yellow-200">
           <AlertTriangleIcon className="h-4 w-4 flex-shrink-0" />
-          <span>No MATCH rule found — add one as a fallback</span>
+          <span>{t('rules.noMatchRule')}</span>
         </div>
       )}
 
       <div className="flex items-center gap-2">
         <Input
           type="text"
-          placeholder="Search rules..."
+          placeholder={t('rules.searchPlaceholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
@@ -125,13 +127,13 @@ export default function RulesPage() {
           onValueChange={(v) => setTypeFilter(!v || v === '__all__' ? '' : v)}
         >
           <SelectTrigger className="w-44">
-            <SelectValue placeholder="All types" />
+            <SelectValue placeholder={t('common.allTypes')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All types</SelectItem>
-            {RULE_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {t}
+            <SelectItem value="__all__">{t('common.allTypes')}</SelectItem>
+            {RULE_TYPES.map((rt) => (
+              <SelectItem key={rt} value={rt}>
+                {rt}
               </SelectItem>
             ))}
           </SelectContent>
@@ -139,7 +141,7 @@ export default function RulesPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : (
         <RuleList
           rules={rules}

@@ -14,10 +14,12 @@ import { ProxyList } from '@/components/proxies/proxy-list';
 import { ProxyForm } from '@/components/proxies/proxy-form';
 import type { Proxy } from '@/api/proxies';
 import { proxiesApi } from '@/api/proxies';
+import { useT } from '@/i18n';
 
 const PROXY_TYPES = ['ss', 'trojan', 'vmess', 'vless', 'http', 'socks5', 'hysteria2', 'tuic'];
 
 export default function ProxiesPage() {
+  const t = useT();
   const [proxies, setProxies] = useState<Proxy[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -34,7 +36,7 @@ export default function ProxiesPage() {
       const res = await proxiesApi.list(params);
       setProxies(res.data ?? []);
     } catch {
-      toast.error('Failed to load proxies');
+      toast.error(t('proxies.loadFailed'));
     } finally {
       setLoading(false);
     }
@@ -58,16 +60,16 @@ export default function ProxiesPage() {
     try {
       if (editingProxy) {
         await proxiesApi.update(editingProxy.id, { name: data.name, type: data.type, config: data.config });
-        toast.success('Proxy updated');
+        toast.success(t('proxies.updated'));
       } else {
         await proxiesApi.create({ name: data.name, type: data.type, config: data.config });
-        toast.success('Proxy created');
+        toast.success(t('proxies.created'));
       }
       setFormOpen(false);
       setEditingProxy(undefined);
       fetchProxies();
     } catch {
-      toast.error(editingProxy ? 'Failed to update proxy' : 'Failed to create proxy');
+      toast.error(editingProxy ? t('proxies.updateFailed') : t('proxies.createFailed'));
     }
   };
 
@@ -78,17 +80,17 @@ export default function ProxiesPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Proxies</h1>
+        <h1 className="text-2xl font-bold">{t('proxies.title')}</h1>
         <Button onClick={handleAddClick}>
           <PlusIcon />
-          Add Proxy
+          {t('proxies.add')}
         </Button>
       </div>
 
       <div className="flex items-center gap-2">
         <Input
           type="text"
-          placeholder="Search proxies..."
+          placeholder={t('proxies.searchPlaceholder')}
           value={search}
           onChange={handleSearchChange}
           className="max-w-xs"
@@ -98,13 +100,13 @@ export default function ProxiesPage() {
           onValueChange={(v) => setTypeFilter(!v || v === '__all__' ? '' : v)}
         >
           <SelectTrigger className="w-40">
-            <SelectValue placeholder="All types" />
+            <SelectValue placeholder={t('common.allTypes')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__all__">All types</SelectItem>
-            {PROXY_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {t}
+            <SelectItem value="__all__">{t('common.allTypes')}</SelectItem>
+            {PROXY_TYPES.map((pt) => (
+              <SelectItem key={pt} value={pt}>
+                {pt}
               </SelectItem>
             ))}
           </SelectContent>
@@ -112,7 +114,7 @@ export default function ProxiesPage() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-muted-foreground">Loading...</div>
+        <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : (
         <ProxyList
           proxies={proxies}

@@ -30,7 +30,7 @@ export interface ValidationResult {
 
 export const publishApi = {
   preview: () => api.get('publish/preview').json<{ data: PublishPreview }>(),
-  validate: () => api.post('publish/validate').json<{ data: ValidationResult }>(),
+  validate: () => api.post('publish/validate', { timeout: 60_000 }).json<{ data: ValidationResult }>(),
   publish: (note?: string) =>
     api.post('publish', { json: { note } }).json<{ data: PublishRecord }>(),
   rollback: () => api.post('publish/rollback').json<{ data: PublishRecord }>(),
