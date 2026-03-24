@@ -2,6 +2,8 @@
 
 Web-based management panel for [mihomo](https://github.com/MetaCubeX/mihomo) proxy. Edit configuration through a structured UI or raw YAML editor, validate with the mihomo binary, and publish changes with one click.
 
+[中文说明](./README.zh.md)
+
 ## Features
 
 - **Proxy Management** — Create, edit, delete, copy, and reorder proxy nodes (ss, vmess, vless, trojan, hysteria2, tuic, etc.)
