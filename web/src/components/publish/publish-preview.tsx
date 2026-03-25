@@ -32,12 +32,14 @@ function DiffView({ diff }: { diff: string }) {
 interface PublishPreviewProps {
   preview: PublishPreview;
   onPublished: () => void;
+  onDiscarded: () => void;
 }
 
-export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
+export function PublishPreview({ preview, onPublished, onDiscarded }: PublishPreviewProps) {
   const t = useT();
   const [validating, setValidating] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [note, setNote] = useState('');
 
@@ -74,6 +76,19 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
       toast.error(t('publish.publishFailed'));
     } finally {
       setPublishing(false);
+    }
+  };
+
+  const handleDiscard = async () => {
+    setDiscarding(true);
+    try {
+      await publishApi.discard();
+      toast.success(t('publish.discardSuccess'));
+      onDiscarded();
+    } catch {
+      toast.error(t('publish.discardFailed'));
+    } finally {
+      setDiscarding(false);
     }
   };
 
@@ -167,6 +182,9 @@ export function PublishPreview({ preview, onPublished }: PublishPreviewProps) {
           </Button>
           <Button onClick={handlePublish} disabled={!canPublish || publishing}>
             {publishing ? t('publish.publishing') : t('publish.publish')}
+          </Button>
+          <Button variant="ghost" onClick={handleDiscard} disabled={discarding}>
+            {discarding ? t('publish.discarding') : t('publish.discard')}
           </Button>
           {!canPublish && validation === null && (
             <p className="text-sm text-muted-foreground">{t('publish.validateFirst')}</p>

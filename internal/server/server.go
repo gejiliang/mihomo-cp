@@ -61,7 +61,6 @@ func New(cfg Config, db *store.DB) *Server {
 	configSvc := service.NewConfigService()
 	validator := service.NewValidator()
 	importSvc := service.NewImportService()
-
 	// MihomoClient — read settings for ext_controller URL and secret.
 	// Default to localhost:9090 if settings cannot be read yet (first boot).
 	mihomoBaseURL := "http://127.0.0.1:9090"
@@ -78,7 +77,8 @@ func New(cfg Config, db *store.DB) *Server {
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(userStore, authSvc)
-	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore)
+	geoIPSvc := service.NewGeoIPService()
+	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore, geoIPSvc, settingsStore)
 	proxyGroupHandler := handler.NewProxyGroupHandler(proxyGroupStore, ruleStore)
 	ruleHandler := handler.NewRuleHandler(ruleStore)
 	ruleProviderHandler := handler.NewRuleProviderHandler(ruleProviderStore, mihomoClient)
@@ -86,7 +86,7 @@ func New(cfg Config, db *store.DB) *Server {
 	publishHandler := handler.NewPublishHandler(
 		proxyStore, proxyGroupStore, ruleStore, ruleProviderStore,
 		configStore, publishStore, settingsStore,
-		configSvc, validator, publishSvc,
+		configSvc, validator, publishSvc, importSvc,
 	)
 	runtimeHandler := handler.NewRuntimeHandler(mihomoClient)
 	importHandler := handler.NewImportHandler(
@@ -147,6 +147,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/proxies", protected(s.proxyHandler.List))
 	s.mux.Handle("POST /api/proxies", protected(s.proxyHandler.Create))
 	s.mux.Handle("POST /api/proxies/reorder", protected(s.proxyHandler.Reorder))
+	s.mux.Handle("POST /api/proxies/detect-countries", protected(s.proxyHandler.DetectCountries))
 	s.mux.Handle("GET /api/proxies/{id}", protected(s.proxyHandler.Get))
 	s.mux.Handle("PUT /api/proxies/{id}", protected(s.proxyHandler.Update))
 	s.mux.Handle("DELETE /api/proxies/{id}", protected(s.proxyHandler.Delete))
@@ -187,6 +188,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/publish/preview", protected(s.publishHandler.Preview))
 	s.mux.Handle("POST /api/publish/validate", protected(s.publishHandler.Validate))
 	s.mux.Handle("POST /api/publish", protected(s.publishHandler.Publish))
+	s.mux.Handle("POST /api/publish/discard", protected(s.publishHandler.Discard))
 	s.mux.Handle("POST /api/publish/rollback", protected(s.publishHandler.Rollback))
 	s.mux.Handle("GET /api/publish/history", protected(s.publishHandler.History))
 	s.mux.Handle("GET /api/publish/history/{id}", protected(s.publishHandler.HistoryDetail))

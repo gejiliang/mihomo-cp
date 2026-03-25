@@ -224,14 +224,14 @@ export default function ProxyGroupsPage() {
               const members = parseMembers(group.members as any);
               const variant = TYPE_VARIANT[group.type] ?? 'outline';
               return (
-                <TableRow key={group.id}>
+                <TableRow key={group.id} className="cursor-pointer" onClick={() => handleEditClick(group)}>
                   <TableCell className="font-medium">{group.name}</TableCell>
                   <TableCell>
                     <Badge variant={variant}>{group.type}</Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground">{members.length}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                       <Button
                         variant="ghost"
                         size="icon-sm"

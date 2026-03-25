@@ -52,9 +52,10 @@ function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRow
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-3 rounded-md border px-3 py-2 ${
+      className={`flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer hover:bg-accent/50 ${
         isMatch ? 'bg-muted/50 border-dashed' : 'bg-background'
       }`}
+      onClick={() => onEdit(rule)}
     >
       {isMatch ? (
         <span className="w-5 flex-shrink-0" />
@@ -62,6 +63,7 @@ function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRow
         <button
           type="button"
           className="cursor-grab text-muted-foreground hover:text-foreground touch-none flex-shrink-0"
+          onClick={(e) => e.stopPropagation()}
           {...attributes}
           {...listeners}
         >
@@ -87,7 +89,7 @@ function SortableRuleRow({ rule, index, onEdit, onDeleteClick }: SortableRuleRow
         </Badge>
       )}
 
-      <div className="flex items-center gap-1 flex-shrink-0">
+      <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
         <Button
           variant="ghost"
           size="icon-sm"

@@ -111,4 +111,7 @@ var migrations = []string{
 	INSERT INTO publish_history_new SELECT id, CAST(version AS TEXT), config_yaml, diff_text, status, error_msg, operator, note, created_at FROM publish_history;
 	DROP TABLE publish_history;
 	ALTER TABLE publish_history_new RENAME TO publish_history`,
+
+	// 011: add country column to proxies
+	`ALTER TABLE proxies ADD COLUMN country TEXT NOT NULL DEFAULT ''`,
 }

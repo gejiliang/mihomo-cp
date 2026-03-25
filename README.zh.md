@@ -6,12 +6,13 @@
 
 ## 功能特性
 
-- **代理节点管理** — 创建、编辑、删除、复制、排序代理节点（ss、vmess、vless、trojan、hysteria2、tuic 等）
+- **代理节点管理** — 创建、编辑、删除、复制、排序代理节点（ss、vmess、vless、trojan、hysteria2、tuic 等），自动检测出口国家，支持单个和批量延迟测试
 - **策略组管理** — Selector、URLTest、Fallback、LoadBalance、Relay 类型策略组，支持拖拽排序成员
 - **规则与规则集** — 完整的规则 CRUD（类型/匹配值/目标），规则集提供者管理
 - **系统配置** — 通用设置、TUN、DNS、外部控制器等结构化配置界面
 - **配置编辑器** — 直接编辑原始 YAML，与发布流程无缝集成
-- **发布中心** — 差异预览、校验（结构化检查 + mihomo 二进制验证）、发布、回滚、带日期前缀的版本历史（如 `20260324-1`）
+- **发布中心** — 差异预览、校验（结构化检查 + mihomo 二进制验证）、发布、取消更改、回滚、带日期前缀的版本历史（如 `20260324-1`）
+- **总览仪表盘** — 活跃连接列表（支持关闭/快捷添加规则，自动刷新），代理节点延迟并发批量测试
 - **运行状态监控** — 实时连接查看/搜索/关闭，策略组延迟测试与切换，运行中的规则/规则集，支持从连接快捷添加规则
 - **中英文切换** — 右上角下拉菜单一键切换语言
 - **认证与权限** — JWT 登录，admin/readonly 角色，用户管理，修改密码
@@ -89,7 +90,7 @@ internal/
   middleware/           # JWT 认证、管理员权限、请求日志
   model/               # 数据模型（User、Proxy、ProxyGroup、Rule、RuleProvider 等）
   server/              # HTTP 服务器启动与路由注册
-  service/             # 业务逻辑（认证、配置渲染、校验、发布、mihomo 客户端）
+  service/             # 业务逻辑（认证、配置渲染、校验、发布、mihomo 客户端、GeoIP 检测）
   store/               # SQLite 数据访问层，自动迁移
 web/
   src/
@@ -131,6 +132,7 @@ web/
 | GET    | `/publish/preview`                | 预览草稿 YAML 及差异      |
 | POST   | `/publish/validate`               | 校验草稿                  |
 | POST   | `/publish`                        | 发布草稿                  |
+| POST   | `/publish/discard`                | 取消草稿更改              |
 | POST   | `/publish/rollback`               | 回滚到上次成功版本        |
 | GET    | `/publish/history`                | 发布历史记录              |
 | GET    | `/runtime/connections`            | 实时连接列表              |

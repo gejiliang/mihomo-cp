@@ -14,16 +14,17 @@ import (
 
 // PublishHandler handles publish workflow endpoints.
 type PublishHandler struct {
-	proxies      *store.ProxyStore
-	proxyGroups  *store.ProxyGroupStore
-	rules        *store.RuleStore
+	proxies       *store.ProxyStore
+	proxyGroups   *store.ProxyGroupStore
+	rules         *store.RuleStore
 	ruleProviders *store.RuleProviderStore
-	configs      *store.ConfigStore
-	publishStore *store.PublishStore
-	settings     *store.SettingsStore
-	configSvc    *service.ConfigService
-	validator    *service.Validator
-	publishSvc   *service.PublishService
+	configs       *store.ConfigStore
+	publishStore  *store.PublishStore
+	settings      *store.SettingsStore
+	configSvc     *service.ConfigService
+	validator     *service.Validator
+	publishSvc    *service.PublishService
+	importSvc     *service.ImportService
 }
 
 // NewPublishHandler creates a new PublishHandler.
@@ -38,6 +39,7 @@ func NewPublishHandler(
 	configSvc *service.ConfigService,
 	validator *service.Validator,
 	publishSvc *service.PublishService,
+	importSvc *service.ImportService,
 ) *PublishHandler {
 	return &PublishHandler{
 		proxies:       proxies,
@@ -50,6 +52,7 @@ func NewPublishHandler(
 		configSvc:     configSvc,
 		validator:     validator,
 		publishSvc:    publishSvc,
+		importSvc:     importSvc,
 	}
 }
 
@@ -255,6 +258,92 @@ func (h *PublishHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSON(w, 200, record)
+}
+
+// Discard handles POST /api/publish/discard
+// Re-imports the running config into DB and overwrites the config file with
+// the re-rendered YAML so that the draft and running config are in sync.
+func (h *PublishHandler) Discard(w http.ResponseWriter, r *http.Request) {
+	st, err := h.settings.Get()
+	if err != nil {
+		Error(w, 500, "internal", "failed to get settings: "+err.Error())
+		return
+	}
+
+	// Read current running config
+	data, err := os.ReadFile(st.MihomoConfig)
+	if err != nil {
+		Error(w, 500, "internal", "failed to read config file: "+err.Error())
+		return
+	}
+
+	// Parse and re-import into DB
+	result, err := h.importSvc.ParseConfig(data)
+	if err != nil {
+		Error(w, 500, "internal", "failed to parse config: "+err.Error())
+		return
+	}
+
+	// Clear existing data
+	if err := h.clearAllData(); err != nil {
+		Error(w, 500, "internal", "failed to clear data: "+err.Error())
+		return
+	}
+
+	// Insert imported data
+	for i := range result.Proxies {
+		_ = h.proxies.Create(&result.Proxies[i])
+	}
+	for i := range result.ProxyGroups {
+		_ = h.proxyGroups.Create(&result.ProxyGroups[i])
+	}
+	for i := range result.Rules {
+		_ = h.rules.Create(&result.Rules[i])
+	}
+	for _, p := range result.RuleProviders {
+		pCopy := p
+		_ = h.ruleProviders.Create(&pCopy)
+	}
+	if len(result.SystemConfig) > 0 {
+		_ = h.configs.Update(result.SystemConfig)
+	}
+
+	// Clear any raw config draft
+	_ = h.settings.ClearRawConfigDraft()
+
+	// Re-render from DB and write back to config file so they match
+	yamlBytes, _, _, _, _, err := h.renderDraft()
+	if err != nil {
+		Error(w, 500, "internal", "failed to render draft: "+err.Error())
+		return
+	}
+	if err := os.WriteFile(st.MihomoConfig, yamlBytes, 0644); err != nil {
+		Error(w, 500, "internal", "failed to write config file: "+err.Error())
+		return
+	}
+
+	JSON(w, 200, map[string]string{"status": "discarded"})
+}
+
+// clearAllData removes all proxies, proxy groups, rules, and rule providers.
+func (h *PublishHandler) clearAllData() error {
+	proxies, _ := h.proxies.List("", "")
+	for _, p := range proxies {
+		_ = h.proxies.Delete(p.ID)
+	}
+	groups, _ := h.proxyGroups.List()
+	for _, g := range groups {
+		_ = h.proxyGroups.Delete(g.ID)
+	}
+	rules, _ := h.rules.List("", "")
+	for _, r := range rules {
+		_ = h.rules.Delete(r.ID)
+	}
+	providers, _ := h.ruleProviders.List()
+	for _, p := range providers {
+		_ = h.ruleProviders.Delete(p.ID)
+	}
+	return nil
 }
 
 // History handles GET /api/publish/history

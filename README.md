@@ -6,12 +6,13 @@ Web-based management panel for [mihomo](https://github.com/MetaCubeX/mihomo) pro
 
 ## Features
 
-- **Proxy Management** — Create, edit, delete, copy, and reorder proxy nodes (ss, vmess, vless, trojan, hysteria2, tuic, etc.)
+- **Proxy Management** — Create, edit, delete, copy, and reorder proxy nodes (ss, vmess, vless, trojan, hysteria2, tuic, etc.) with auto country detection and per-proxy latency testing
 - **Proxy Groups** — Selector, URLTest, Fallback, LoadBalance, Relay groups with drag-sort members
 - **Rules & Rule Providers** — Full rule CRUD with type/payload/target, rule-set provider management
 - **System Config** — General, TUN, DNS, External Controller settings via structured UI
 - **Config Editor** — Direct YAML editing for advanced users, integrated with the publish workflow
-- **Publish Center** — Preview diff, validate (structural + mihomo binary check), publish, rollback, version history with date-prefixed versions (e.g., `20260324-1`)
+- **Publish Center** — Preview diff, validate (structural + mihomo binary check), publish, discard changes, rollback, version history with date-prefixed versions (e.g., `20260324-1`)
+- **Overview Dashboard** — Active connections with close/add-rule actions (auto-refresh), proxy list with concurrent batch latency testing
 - **Runtime Monitor** — Live connections with search/close, proxy groups with delay testing and switching, running rules/providers, quick "add rule" from connection host
 - **i18n** — Chinese and English, switchable from header dropdown
 - **Auth** — JWT-based login, admin/readonly roles, user management, password change
@@ -89,7 +90,7 @@ internal/
   middleware/           # JWT auth, admin-only, request logging
   model/               # Data models (User, Proxy, ProxyGroup, Rule, RuleProvider, etc.)
   server/              # HTTP server setup and route registration
-  service/             # Business logic (auth, config rendering, validation, publish, mihomo client)
+  service/             # Business logic (auth, config rendering, validation, publish, mihomo client, GeoIP detection)
   store/               # SQLite data access layer with auto-migrations
 web/
   src/
@@ -131,6 +132,7 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | GET    | `/publish/preview`                | Preview draft YAML + diff  |
 | POST   | `/publish/validate`               | Validate draft             |
 | POST   | `/publish`                        | Publish draft              |
+| POST   | `/publish/discard`                | Discard draft changes      |
 | POST   | `/publish/rollback`               | Rollback to last success   |
 | GET    | `/publish/history`                | Publish history            |
 | GET    | `/runtime/connections`            | Live connections           |

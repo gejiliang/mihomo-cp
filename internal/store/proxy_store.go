@@ -17,9 +17,9 @@ func NewProxyStore(db *DB) *ProxyStore {
 	return &ProxyStore{db: db}
 }
 
-// List returns proxies with optional search and type filters, ordered by sort_order.
+// List returns proxies with optional search, type, and country filters, ordered by sort_order.
 func (s *ProxyStore) List(search, proxyType string) ([]*model.Proxy, error) {
-	query := `SELECT id, name, type, config, sort_order, created_at, updated_at FROM proxies WHERE 1=1`
+	query := `SELECT id, name, type, country, config, sort_order, created_at, updated_at FROM proxies WHERE 1=1`
 	args := []any{}
 
 	if search != "" {
@@ -43,7 +43,7 @@ func (s *ProxyStore) List(search, proxyType string) ([]*model.Proxy, error) {
 // GetByID retrieves a proxy by ID.
 func (s *ProxyStore) GetByID(id string) (*model.Proxy, error) {
 	var p model.Proxy
-	err := s.db.Get(&p, `SELECT id, name, type, config, sort_order, created_at, updated_at FROM proxies WHERE id = ?`, id)
+	err := s.db.Get(&p, `SELECT id, name, type, country, config, sort_order, created_at, updated_at FROM proxies WHERE id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("get proxy by id: %w", err)
 	}
@@ -53,7 +53,7 @@ func (s *ProxyStore) GetByID(id string) (*model.Proxy, error) {
 // GetByName retrieves a proxy by name.
 func (s *ProxyStore) GetByName(name string) (*model.Proxy, error) {
 	var p model.Proxy
-	err := s.db.Get(&p, `SELECT id, name, type, config, sort_order, created_at, updated_at FROM proxies WHERE name = ?`, name)
+	err := s.db.Get(&p, `SELECT id, name, type, country, config, sort_order, created_at, updated_at FROM proxies WHERE name = ?`, name)
 	if err != nil {
 		return nil, fmt.Errorf("get proxy by name: %w", err)
 	}
@@ -66,8 +66,8 @@ func (s *ProxyStore) Create(p *model.Proxy) error {
 	p.CreatedAt = now
 	p.UpdatedAt = now
 	_, err := s.db.Exec(
-		`INSERT INTO proxies (id, name, type, config, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.Type, p.Config, p.SortOrder, p.CreatedAt, p.UpdatedAt,
+		`INSERT INTO proxies (id, name, type, country, config, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.Type, p.Country, p.Config, p.SortOrder, p.CreatedAt, p.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create proxy: %w", err)
@@ -79,8 +79,8 @@ func (s *ProxyStore) Create(p *model.Proxy) error {
 func (s *ProxyStore) Update(p *model.Proxy) error {
 	p.UpdatedAt = time.Now().UTC()
 	_, err := s.db.Exec(
-		`UPDATE proxies SET name = ?, type = ?, config = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
-		p.Name, p.Type, p.Config, p.SortOrder, p.UpdatedAt, p.ID,
+		`UPDATE proxies SET name = ?, type = ?, country = ?, config = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
+		p.Name, p.Type, p.Country, p.Config, p.SortOrder, p.UpdatedAt, p.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update proxy: %w", err)

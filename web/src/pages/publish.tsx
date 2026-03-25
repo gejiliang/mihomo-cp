@@ -76,6 +76,11 @@ export default function PublishPage() {
     fetchHistory();
   };
 
+  const handleDiscarded = () => {
+    fetchStatus();
+    fetchPreview();
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">{t('publish.title')}</h1>
@@ -115,7 +120,7 @@ export default function PublishPage() {
               {t('publish.loadingPreview')}
             </div>
           ) : preview ? (
-            <PublishPreviewComponent preview={preview} onPublished={handlePublished} />
+            <PublishPreviewComponent preview={preview} onPublished={handlePublished} onDiscarded={handleDiscarded} />
           ) : null}
         </>
       )}

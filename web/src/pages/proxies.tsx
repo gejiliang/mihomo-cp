@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon } from 'lucide-react';
+import { PlusIcon, ActivityIcon, LoaderIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -24,8 +24,11 @@ export default function ProxiesPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [countryFilter, setCountryFilter] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editingProxy, setEditingProxy] = useState<Proxy | undefined>(undefined);
+  const [testAllTrigger, setTestAllTrigger] = useState(0);
+  const [testingAll, setTestingAll] = useState(false);
 
   const fetchProxies = useCallback(async () => {
     setLoading(true);
@@ -73,18 +76,33 @@ export default function ProxiesPage() {
     }
   };
 
-  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(e.target.value);
-  };
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{t('proxies.title')}</h1>
-        <Button onClick={handleAddClick}>
-          <PlusIcon />
-          {t('proxies.add')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => { setTestingAll(true); setTestAllTrigger((n) => n + 1); }}
+            disabled={testingAll}
+          >
+            {testingAll ? (
+              <>
+                <LoaderIcon className="h-3.5 w-3.5 animate-spin" />
+                {t('proxies.testing')}
+              </>
+            ) : (
+              <>
+                <ActivityIcon className="h-3.5 w-3.5" />
+                {t('proxies.testAllDelay')}
+              </>
+            )}
+          </Button>
+          <Button onClick={handleAddClick}>
+            <PlusIcon />
+            {t('proxies.add')}
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2">
@@ -92,7 +110,7 @@ export default function ProxiesPage() {
           type="text"
           placeholder={t('proxies.searchPlaceholder')}
           value={search}
-          onChange={handleSearchChange}
+          onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
         <Select
@@ -111,16 +129,34 @@ export default function ProxiesPage() {
             ))}
           </SelectContent>
         </Select>
+        <Select
+          value={countryFilter}
+          onValueChange={(v) => setCountryFilter(!v || v === '__all__' ? '' : v)}
+        >
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder={t('proxies.allCountries')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">{t('proxies.allCountries')}</SelectItem>
+            {[...new Set(proxies.map((p) => p.country).filter(Boolean))].sort().map((c) => (
+              <SelectItem key={c} value={c}>
+                {c}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {loading ? (
         <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : (
         <ProxyList
-          proxies={proxies}
+          proxies={countryFilter ? proxies.filter((p) => p.country === countryFilter) : proxies}
           onEdit={handleEditClick}
           onDeleted={fetchProxies}
           onCopied={fetchProxies}
+          testAllTrigger={testAllTrigger}
+          onTestAllDone={() => setTestingAll(false)}
         />
       )}
 

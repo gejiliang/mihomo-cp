@@ -289,7 +289,7 @@ export default function RuleProvidersPage() {
           </TableHeader>
           <TableBody>
             {providers.map((provider) => (
-              <TableRow key={provider.id}>
+              <TableRow key={provider.id} className="cursor-pointer" onClick={() => { setEditingProvider(provider); setFormOpen(true); }}>
                 <TableCell className="font-medium">{provider.name}</TableCell>
                 <TableCell>
                   <Badge variant="secondary">{provider.type}</Badge>
@@ -298,7 +298,7 @@ export default function RuleProvidersPage() {
                   <Badge variant="outline">{provider.behavior}</Badge>
                 </TableCell>
                 <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                     {provider.type === 'http' && (
                       <Button
                         variant="ghost"

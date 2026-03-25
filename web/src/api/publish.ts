@@ -29,6 +29,7 @@ export interface ValidationResult {
 }
 
 export const publishApi = {
+  discard: () => api.post('publish/discard').json<{ data: { status: string } }>(),
   preview: () => api.get('publish/preview').json<{ data: PublishPreview }>(),
   validate: () => api.post('publish/validate', { timeout: 60_000 }).json<{ data: ValidationResult }>(),
   publish: (note?: string) =>
