@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** MVP implemented (2026-03-25). All tasks complete.
+
 **Goal:** Build a single-binary web management console for locally deployed mihomo, providing config editing, publish/rollback, and runtime observability.
 
 **Architecture:** Go backend with embedded React SPA frontend. SQLite for persistence. Backend reads/writes mihomo config files directly and proxies runtime API calls to mihomo's external-controller. Draft-first editing model — all changes stay in draft until validated and published.
@@ -59,6 +61,7 @@ internal/
   service/import_service_test.go         # Import tests
   service/auth_service.go                # JWT token generation/validation
   service/auth_service_test.go           # Auth tests
+  service/geoip_service.go              # GeoIP detection via mihomo SOCKS proxy
 web/                                     # React frontend (Vite project)
   index.html
   vite.config.ts

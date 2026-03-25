@@ -1,8 +1,8 @@
 # Mihomo Control Plane - Technical Design Spec
 
-- Version: v1.0
-- Date: 2026-03-23
-- Status: Draft
+- Version: v1.1
+- Date: 2026-03-25
+- Status: Implemented
 - Source PRD: `PRD-mihomo-control-plane.md`
 
 ## 1. System Overview
@@ -31,6 +31,7 @@ A single-binary web management console for locally deployed mihomo instances. Pr
 - Control Plane reads/writes mihomo config files directly
 - Validates via `mihomo -t -d <config-dir>`
 - Controls runtime via mihomo's external-controller RESTful API
+- GeoIP detection via mihomo SOCKS proxy (switches GLOBAL selector, queries ip-api.com)
 - Phase 3: extend to remote multi-instance management
 
 ### 1.2 Key Design Principles
@@ -106,6 +107,7 @@ internal/
     mihomo_client.go     # HTTP client for mihomo external-controller API
     validator.go         # Config validation (reference checks, schema validation)
     import_service.go    # Import existing mihomo config YAML → structured data
+    geoip_service.go     # GeoIP detection via mihomo SOCKS proxy (auto country detection)
 
   middleware/
     auth.go              # JWT verification
@@ -181,8 +183,8 @@ web/
 
 ```
 Sidebar:
-  ├── Overview          # System status summary
-  ├── Proxies           # Node management
+  ├── Overview          # Active connections + proxy latency dashboard
+  ├── Proxies           # Node management (with country filter & batch delay test)
   ├── Proxy Groups      # Strategy group management
   ├── Rules             # Rule management
   ├── Rule Providers    # Rule provider management
@@ -202,6 +204,7 @@ CREATE TABLE proxies (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL UNIQUE,
     type        TEXT NOT NULL,  -- ss, trojan, vmess, vless, http, socks5, hysteria2, tuic
+    country     TEXT NOT NULL DEFAULT '',  -- ISO 3166-1 alpha-2 (auto-detected via GeoIP)
     config      TEXT NOT NULL,  -- JSON: protocol-specific fields
     sort_order  INTEGER NOT NULL DEFAULT 0,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -336,7 +339,10 @@ DELETE /api/proxies/:id          # Delete (with reference check)
 POST   /api/proxies/:id/copy     # Duplicate
 POST   /api/proxies/reorder      # Batch reorder: { ids: [...] }
 GET    /api/proxies/:id/refs     # What groups reference this proxy
+POST   /api/proxies/detect-countries  # Bulk country detection via mihomo SOCKS proxy
 ```
+
+> **Note**: Country detection is also triggered automatically (async) when creating or updating a proxy.
 
 ### 5.3 Proxy Groups
 
@@ -385,6 +391,7 @@ PUT    /api/system-config        # Update draft config
 GET    /api/publish/preview      # Render current draft → YAML + diff
 POST   /api/publish/validate     # Run mihomo -t on rendered config
 POST   /api/publish              # Publish: validate → backup → write → reload
+POST   /api/publish/discard      # Discard draft: re-import running config, reset has_changes
 POST   /api/publish/rollback     # Rollback to previous version
 GET    /api/publish/history      # List publish history
 GET    /api/publish/history/:id  # Get specific publish record with YAML
