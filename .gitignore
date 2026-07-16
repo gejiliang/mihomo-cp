@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# build artifacts（自 homelab 根 .gitignore 迁移，2026-07-17 拆库）
+/mihomo-cp
+/mihomo-cp-*
+*.db
+*.sqlite
+*.sqlite3
+/data/
+
+# internal-only：组织归属信息与内部过程文档，不入公开仓库（同 quota-proxy 的 CLAUDE.md 先例）
+AGENTS.md
+/PROJECT_WRAPUP.md
+/docs/superpowers/
