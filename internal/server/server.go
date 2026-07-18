@@ -37,6 +37,9 @@ type Server struct {
 	runtimeHandler      *handler.RuntimeHandler
 	importHandler       *handler.ImportHandler
 	settingsHandler     *handler.SettingsHandler
+	trafficHandler      *handler.TrafficHandler
+	trafficSvc          *service.TrafficService
+	trafficCancel       context.CancelFunc
 }
 
 // New creates a new Server from the given Config and database.
@@ -89,6 +92,10 @@ func New(cfg Config, db *store.DB) *Server {
 		configSvc, validator, publishSvc, importSvc,
 	)
 	runtimeHandler := handler.NewRuntimeHandler(mihomoClient)
+	trafficStore := store.NewTrafficStore(db)
+	notifySvc := service.NewNotifyService()
+	trafficSvc := service.NewTrafficService(trafficStore, mihomoClient, notifySvc)
+	trafficHandler := handler.NewTrafficHandler(trafficSvc, trafficStore, notifySvc)
 	importHandler := handler.NewImportHandler(
 		importSvc, proxyStore, proxyGroupStore, ruleStore, ruleProviderStore, configStore, settingsStore,
 	)
@@ -108,6 +115,8 @@ func New(cfg Config, db *store.DB) *Server {
 		runtimeHandler:      runtimeHandler,
 		importHandler:       importHandler,
 		settingsHandler:     settingsHandler,
+		trafficHandler:      trafficHandler,
+		trafficSvc:          trafficSvc,
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 			Handler: middleware.Logging(mux),
@@ -207,6 +216,18 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("PUT /api/runtime/providers/rules/{name}", protected(s.runtimeHandler.RefreshProvider))
 	s.mux.Handle("GET /api/runtime/version", protected(s.runtimeHandler.Version))
 
+	// ── Traffic accounting & alerting ─────────────────────────────────────────
+	s.mux.Handle("GET /api/traffic/summary", protected(s.trafficHandler.Summary))
+	s.mux.Handle("GET /api/traffic/history", protected(s.trafficHandler.History))
+	s.mux.Handle("GET /api/traffic/providers", protected(s.trafficHandler.ListProviders))
+	s.mux.Handle("POST /api/traffic/providers", protected(s.trafficHandler.CreateProvider))
+	s.mux.Handle("PUT /api/traffic/providers/{id}", protected(s.trafficHandler.UpdateProvider))
+	s.mux.Handle("DELETE /api/traffic/providers/{id}", protected(s.trafficHandler.DeleteProvider))
+	s.mux.Handle("GET /api/traffic/alerts", protected(s.trafficHandler.Alerts))
+	s.mux.Handle("GET /api/traffic/settings", protected(s.trafficHandler.GetSettings))
+	s.mux.Handle("PUT /api/traffic/settings", protected(s.trafficHandler.UpdateSettings))
+	s.mux.Handle("POST /api/traffic/test-notify", protected(s.trafficHandler.TestNotify))
+
 	// ── Import ────────────────────────────────────────────────────────────────
 	s.mux.Handle("POST /api/import/config", protected(s.importHandler.Import))
 
@@ -256,6 +277,10 @@ func (s *Server) registerRoutes() {
 // Start begins listening and serving HTTP requests. It blocks until the server
 // is closed or encounters an error other than http.ErrServerClosed.
 func (s *Server) Start() error {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.trafficCancel = cancel
+	go s.trafficSvc.Run(ctx)
+
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -264,6 +289,9 @@ func (s *Server) Start() error {
 
 // Shutdown gracefully stops the server using the provided context.
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.trafficCancel != nil {
+		s.trafficCancel()
+	}
 	return s.httpServer.Shutdown(ctx)
 }
 

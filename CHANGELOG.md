@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-07-18
+
+### Added
+- **Traffic accounting** — Background collector polls mihomo `/connections` every 2s, attributes per-connection traffic deltas to the actual outbound node (`chains[0]`), and persists hourly buckets in SQLite (90-day retention)
+- **Traffic providers** — Vendors with monthly quota, custom billing-cycle reset day (1-31), and glob node patterns (e.g. `PS-*`) for attribution; full CRUD in the new Traffic page
+- **Vendor-reported usage** — Optional subscription URL per provider; the `subscription-userinfo` response header is fetched every 30 minutes (with `clash.meta` UA) and used as the authoritative usage figure when larger than the local count
+- **Quota alerts** — Configurable thresholds (default 80%, 95%) checked every 5 minutes; each threshold fires at most once per billing cycle; delivery via Bark, ntfy, or generic JSON webhook, plus an in-app alert log and test-notification button
+- **Traffic page** — Per-provider usage meters with cycle info, burn-rate exhaustion estimate, top nodes, 30-day stacked daily usage chart, unassigned-node visibility, and alert settings
+
 ## 2026-03-25
 
 ### Added

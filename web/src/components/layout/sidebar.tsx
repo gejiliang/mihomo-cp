@@ -8,6 +8,7 @@ import {
   Settings2,
   Rocket,
   Activity,
+  Gauge,
   Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -24,6 +25,7 @@ const navItems: { to: string; labelKey: TranslationKey; icon: LucideIcon; end?: 
   { to: '/system-config', labelKey: 'nav.systemConfig', icon: Settings2 },
   { to: '/publish', labelKey: 'nav.publish', icon: Rocket },
   { to: '/runtime', labelKey: 'nav.runtime', icon: Activity },
+  { to: '/traffic', labelKey: 'nav.traffic', icon: Gauge },
   { to: '/settings', labelKey: 'nav.settings', icon: Settings },
 ];
 

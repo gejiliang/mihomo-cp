@@ -114,4 +114,52 @@ var migrations = []string{
 
 	// 011: add country column to proxies
 	`ALTER TABLE proxies ADD COLUMN country TEXT NOT NULL DEFAULT ''`,
+
+	// 012: traffic accounting & alerting
+	`CREATE TABLE IF NOT EXISTS traffic_providers (
+		id               TEXT PRIMARY KEY,
+		name             TEXT UNIQUE NOT NULL,
+		quota_bytes      INTEGER NOT NULL DEFAULT 0,
+		reset_day        INTEGER NOT NULL DEFAULT 1,
+		node_patterns    TEXT NOT NULL DEFAULT '[]',
+		subscription_url TEXT NOT NULL DEFAULT '',
+		enabled          INTEGER NOT NULL DEFAULT 1,
+		created_at       DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at       DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE TABLE IF NOT EXISTS traffic_hourly (
+		bucket   INTEGER NOT NULL,
+		node     TEXT NOT NULL,
+		upload   INTEGER NOT NULL DEFAULT 0,
+		download INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (bucket, node)
+	);
+	CREATE TABLE IF NOT EXISTS traffic_userinfo (
+		provider_id TEXT PRIMARY KEY,
+		upload      INTEGER NOT NULL DEFAULT 0,
+		download    INTEGER NOT NULL DEFAULT 0,
+		total       INTEGER NOT NULL DEFAULT 0,
+		expire      INTEGER NOT NULL DEFAULT 0,
+		fetched_at  DATETIME NOT NULL
+	);
+	CREATE TABLE IF NOT EXISTS traffic_alerts (
+		id          TEXT PRIMARY KEY,
+		provider_id TEXT NOT NULL,
+		cycle_start TEXT NOT NULL,
+		threshold   INTEGER NOT NULL,
+		usage_bytes INTEGER NOT NULL DEFAULT 0,
+		quota_bytes INTEGER NOT NULL DEFAULT 0,
+		message     TEXT NOT NULL DEFAULT '',
+		notified    INTEGER NOT NULL DEFAULT 0,
+		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
+		UNIQUE (provider_id, cycle_start, threshold)
+	);
+	CREATE TABLE IF NOT EXISTS traffic_settings (
+		id               INTEGER PRIMARY KEY CHECK(id = 1),
+		alert_channel    TEXT NOT NULL DEFAULT '',
+		alert_target     TEXT NOT NULL DEFAULT '',
+		alert_thresholds TEXT NOT NULL DEFAULT '[80,95]',
+		updated_at       DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
+	INSERT OR IGNORE INTO traffic_settings (id) VALUES (1)`,
 }

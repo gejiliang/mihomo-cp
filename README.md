@@ -14,6 +14,7 @@ Web-based management panel for [mihomo](https://github.com/MetaCubeX/mihomo) pro
 - **Publish Center** — Preview diff, validate (structural + mihomo binary check), publish, discard changes, rollback, version history with date-prefixed versions (e.g., `20260324-1`)
 - **Overview Dashboard** — Active connections with close/add-rule actions (auto-refresh), proxy list with concurrent batch latency testing
 - **Runtime Monitor** — Live connections with search/close, proxy groups with delay testing and switching, running rules/providers, quick "add rule" from connection host
+- **Traffic Accounting & Quota Alerts** — Per-vendor monthly quota tracking: local per-node accounting (polls `/connections`, attributes deltas to the outbound node), optional vendor-reported usage via the `subscription-userinfo` header, billing-cycle aware (custom reset day), daily usage chart, and threshold alerts (once per cycle) via Bark / ntfy / webhook
 - **i18n** — Chinese and English, switchable from header dropdown
 - **Auth** — JWT-based login, admin/readonly roles, user management, password change
 - **Single Binary** — Frontend embedded via `embed.FS`, no separate web server needed

@@ -10,6 +10,7 @@ import RuleProvidersPage from './pages/rule-providers';
 import SystemConfigPage from './pages/system-config';
 import PublishPage from './pages/publish';
 import RuntimePage from './pages/runtime';
+import TrafficPage from './pages/traffic';
 import SettingsPage from './pages/settings';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -36,6 +37,7 @@ export const router = createBrowserRouter([
       { path: 'system-config', element: <SystemConfigPage /> },
       { path: 'publish', element: <PublishPage /> },
       { path: 'runtime', element: <RuntimePage /> },
+      { path: 'traffic', element: <TrafficPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],
   },
