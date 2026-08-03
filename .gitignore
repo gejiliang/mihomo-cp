@@ -11,5 +11,7 @@
 
 # internal-only：组织归属信息与内部过程文档，不入公开仓库（同 quota-proxy 的 CLAUDE.md 先例）
 AGENTS.md
+CLAUDE.md
 /PROJECT_WRAPUP.md
 /docs/superpowers/
+memory/
