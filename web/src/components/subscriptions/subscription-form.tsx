@@ -190,7 +190,9 @@ export function SubscriptionForm({
       setResetDay(hasReset ? String(subscription.reset_day) : '1');
       setResetHour(String(subscription.reset_hour || 0));
       setResetMinute(String(subscription.reset_minute || 0));
-      setTimezone(subscription.timezone || (hasReset ? browserTimezone() : ''));
+      // Empty timezone means server-local for an existing valid schedule;
+      // never silently replace it with the browser zone.
+      setTimezone(subscription.timezone || '');
       setTrafficProviderID(subscription.traffic_provider_id || '');
     } else {
       setName('');
@@ -306,9 +308,14 @@ export function SubscriptionForm({
       reset_minute: minute,
       timezone: resetConfigured ? timezone.trim() : '',
     };
-    // Linking an existing provider must not send a URL (the backend rejects
-    // it and would otherwise overwrite the shared provider entry).
-    if (!existingProvider && trimmedUrl) input.url = trimmedUrl;
+    // Creating against an existing provider must omit the URL (link-only).
+    // Editing the current subscription's own provider may update its URL;
+    // switching to a different existing provider must not overwrite that
+    // provider's stored URL.
+    const editingCurrentProvider =
+      !!subscription && trimmedProvider === subscription.provider_name;
+    const mayUpdateProviderURL = !existingProvider || editingCurrentProvider;
+    if (mayUpdateProviderURL && trimmedUrl) input.url = trimmedUrl;
     // Only send supplement fields the user deliberately changed. Omitting
     // them preserves vendor/manual values already stored by the backend.
     if (quotaDirty) {
@@ -395,7 +402,7 @@ export function SubscriptionForm({
               <p className="text-xs text-muted-foreground">
                 {subscription ? t('subscriptions.urlKeepHint') : t('subscriptions.urlMaskedHint')}
               </p>
-              {existingProvider && (
+              {existingProvider && (!subscription || providerName.trim() !== subscription.provider_name) && (
                 <p className="text-xs text-muted-foreground">
                   {t('subscriptions.urlIgnoredForLink')}
                 </p>

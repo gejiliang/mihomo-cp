@@ -103,6 +103,44 @@ describe('SubscriptionForm', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it('submits a new URL when editing the current provider', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm();
+
+    const url = screen.getByLabelText('Subscription URL');
+    await user.type(url, 'https://sub.example.com/new-token');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.url).toBe('https://sub.example.com/new-token');
+  });
+
+  it('preserves a valid schedule with empty timezone as server-local', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        reset_day: 10,
+        reset_hour: 12,
+        reset_minute: 0,
+        timezone: null,
+      },
+    });
+
+    expect(screen.getByLabelText('Timezone')).toHaveValue('');
+    const name = screen.getByLabelText('Name');
+    await user.clear(name);
+    await user.type(name, 'Renamed only');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.reset_day).toBe(10);
+    expect(input.reset_hour).toBe(12);
+    expect(input.timezone).toBe('');
+  });
+
   it('requires a URL when the provider does not exist yet', async () => {
     const user = userEvent.setup();
     const { onSave } = renderForm({ subscription: null, providers: [] });
