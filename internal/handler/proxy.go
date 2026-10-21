@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gejiliang/mihomo-cp/internal/middleware"
 	"github.com/gejiliang/mihomo-cp/internal/model"
 	"github.com/gejiliang/mihomo-cp/internal/service"
 	"github.com/gejiliang/mihomo-cp/internal/store"
@@ -23,6 +24,40 @@ func NewProxyHandler(ps *store.ProxyStore, pgs *store.ProxyGroupStore, scoring *
 	return &ProxyHandler{proxies: ps, proxyGroups: pgs, scoring: scoring, settings: ss}
 }
 
+// sensitiveProxyKeys are node-config fields that carry credentials. Reads by
+// non-admin users get these redacted (top level and one nesting level down,
+// e.g. reality-opts.private-key).
+var sensitiveProxyKeys = map[string]bool{
+	"password": true, "uuid": true, "token": true, "psk": true,
+	"private-key": true, "private_key": true, "secret": true, "auth": true,
+}
+
+// sanitizeProxyConfig redacts credential fields from a proxy config JSON.
+func sanitizeProxyConfig(raw json.RawMessage) json.RawMessage {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw // unparsable: return as stored
+	}
+	redactMap(m)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func redactMap(m map[string]any) {
+	for k, v := range m {
+		if nested, ok := v.(map[string]any); ok {
+			redactMap(nested)
+			continue
+		}
+		if sensitiveProxyKeys[k] {
+			m[k] = "[redacted]"
+		}
+	}
+}
+
 // List handles GET /api/proxies
 func (h *ProxyHandler) List(w http.ResponseWriter, r *http.Request) {
 	search := r.URL.Query().Get("search")
@@ -31,6 +66,11 @@ func (h *ProxyHandler) List(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error(w, 500, "internal", err.Error())
 		return
+	}
+	if middleware.GetRole(r.Context()) != "admin" {
+		for _, p := range proxies {
+			p.Config = sanitizeProxyConfig(p.Config)
+		}
 	}
 	JSON(w, 200, proxies)
 }
@@ -42,6 +82,9 @@ func (h *ProxyHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		Error(w, 404, "not_found", "proxy not found")
 		return
+	}
+	if middleware.GetRole(r.Context()) != "admin" {
+		p.Config = sanitizeProxyConfig(p.Config)
 	}
 	JSON(w, 200, p)
 }

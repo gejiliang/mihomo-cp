@@ -76,6 +76,13 @@ type ScoringService struct {
 	concurrency int
 	wake        chan struct{}
 
+	// proberMu guards the lazily-built default runner so a settings change
+	// (new binary path) swaps it safely; an injected prober (tests) always
+	// wins and is never rebuilt.
+	proberMu      sync.Mutex
+	defaultRunner *MihomoIsolation
+	cachedBinary  string
+
 	// overridable endpoints (tests)
 	claudeTraceURL string
 	cfTraceURL     string
@@ -121,6 +128,31 @@ func NewScoringService(
 		provNodes:      map[string]provNodes{},
 		nowFn:          time.Now,
 	}
+}
+
+// currentProber resolves the prober for one job: an injected prober (tests)
+// always wins; otherwise the default isolated runner is built from the
+// CURRENT settings, swapping safely when the binary path changes and failing
+// with a resolvable error (never a panic) when no binary is configured.
+func (s *ScoringService) currentProber() (EgressProber, error) {
+	if s.prober != nil {
+		return s.prober, nil
+	}
+	st, err := s.settings.Get()
+	if err != nil {
+		return nil, fmt.Errorf("read settings for egress prober: %w", err)
+	}
+	bin := strings.TrimSpace(st.MihomoBinary)
+	if bin == "" {
+		return nil, errors.New("mihomo binary is not configured in Settings")
+	}
+	s.proberMu.Lock()
+	defer s.proberMu.Unlock()
+	if s.defaultRunner == nil || s.cachedBinary != bin {
+		s.defaultRunner = NewMihomoIsolation(bin)
+		s.cachedBinary = bin
+	}
+	return s.defaultRunner, nil
 }
 
 // Wake nudges the scheduler loop (new work enqueued).
@@ -397,6 +429,7 @@ func (s *ScoringService) RefreshNodes(ids []string, all bool) (queued, running, 
 		}
 		row.Status = model.ScoreStatusPending
 		row.NextDue = model.NewNullTime(now)
+		row.ManualRequest = true // survives restart; runs even when paused
 		if upErr := s.scores.Upsert(row); upErr != nil {
 			return queued, running, skipped, upErr
 		}
@@ -419,10 +452,19 @@ func (s *ScoringService) dispatch(ctx context.Context) {
 		return
 	}
 
+	// Automatic dispatch skips paused subscriptions entirely (their backlog
+	// cannot starve other providers behind the batch limit); rows carrying a
+	// persisted manual request still run.
+	paused := s.disabledProviders()
+	pausedNames := make([]string, 0, len(paused))
+	for name := range paused {
+		pausedNames = append(pausedNames, name)
+	}
+
 	sem := make(chan struct{}, s.concurrency)
 	var wg sync.WaitGroup
 	for {
-		rows, err := s.scores.ListDue(now, 32)
+		rows, err := s.scores.ListDue(now, 32, pausedNames)
 		if err != nil {
 			slog.Warn("scoring: list due failed", "err", err)
 			return
@@ -566,6 +608,13 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 		return
 	}
 
+	prober, perr := s.currentProber()
+	if perr != nil {
+		s.fail(row, ErrCodeConfigMissing, sanitizeMessage(perr), s.nowFn())
+		logCtx.Warn("scoring: no usable prober", "err", perr)
+		return
+	}
+
 	isoCfg := s.isolationConfig()
 	iface, gerr := s.underlayInterface(isoCfg.Interface)
 	if gerr != nil {
@@ -577,7 +626,7 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 
 	probeCtx, cancel := context.WithTimeout(ctx, ProbeTimeout)
 	defer cancel()
-	session, err := s.prober.Probe(probeCtx, topo, isoCfg)
+	session, err := prober.Probe(probeCtx, topo, isoCfg)
 	if err != nil {
 		s.fail(row, ErrCodeTestFailed, sanitizeMessage(err), s.nowFn())
 		logCtx.Warn("scoring: isolated probe failed", "err", err)
@@ -599,6 +648,7 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 	if rateLimit != nil {
 		now := s.nowFn()
 		row.Status = model.ScoreStatusPending
+		row.ManualRequest = false // consumed; 429 keeps its Retry-After backoff
 		row.ErrorCode = ErrCodeRateLimited
 		row.LastError = sanitizeMessage(rateLimit)
 		row.CheckedAt = model.NewNullTime(now)
@@ -616,6 +666,7 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 
 	now := s.nowFn()
 	row.Status = model.ScoreStatusOK
+	row.ManualRequest = false // consumed
 	row.ErrorCode = ""
 	row.ClaudeScore = scores.claudeScore
 	row.ClaudeIPMatch = scores.claudeMatch
@@ -807,6 +858,7 @@ func fetchTraceIP(ctx context.Context, client *http.Client, traceURL string) (st
 func (s *ScoringService) fail(row model.NodeScore, code, msg string, now time.Time) {
 	row.Status = model.ScoreStatusFailed
 	row.ErrorCode = code
+	row.ManualRequest = false // consumed
 	row.LastError = msg
 	row.CheckedAt = model.NewNullTime(now)
 	row.Attempts++

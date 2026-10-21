@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
@@ -53,20 +54,21 @@ func (s *NodeScoreStore) Upsert(row *model.NodeScore) error {
 		`INSERT INTO node_scores (
 			node_key, source, node_name, provider_name, status, fingerprint, claude_score,
 			claude_ip_match, claude_response_ip, lookup_match, egress_ip, exit_ip_source,
-			ip_info, error_code, checked_at, last_success_at, next_due, attempts, last_error, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ip_info, error_code, manual_request, checked_at, last_success_at, next_due, attempts, last_error, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(node_key) DO UPDATE SET
 			source = excluded.source, node_name = excluded.node_name, provider_name = excluded.provider_name,
 			status = excluded.status, fingerprint = excluded.fingerprint, claude_score = excluded.claude_score,
 			claude_ip_match = excluded.claude_ip_match, claude_response_ip = excluded.claude_response_ip,
 			lookup_match = excluded.lookup_match, egress_ip = excluded.egress_ip,
 			exit_ip_source = excluded.exit_ip_source, ip_info = excluded.ip_info,
-			error_code = excluded.error_code, checked_at = excluded.checked_at,
+			error_code = excluded.error_code, manual_request = excluded.manual_request,
+			checked_at = excluded.checked_at,
 			last_success_at = excluded.last_success_at, next_due = excluded.next_due,
 			attempts = excluded.attempts, last_error = excluded.last_error, updated_at = excluded.updated_at`,
 		row.NodeKey, row.Source, row.NodeName, row.ProviderName, row.Status, row.Fingerprint, row.ClaudeScore,
 		row.ClaudeIPMatch, row.ClaudeResponseIP, row.LookupMatch, row.EgressIP, row.ExitIPSource,
-		row.IPInfo, row.ErrorCode, row.CheckedAt, row.LastSuccessAt,
+		row.IPInfo, row.ErrorCode, row.ManualRequest, row.CheckedAt, row.LastSuccessAt,
 		row.NextDue, row.Attempts, row.LastError, row.CreatedAt, row.UpdatedAt,
 	)
 	if err != nil {
@@ -97,13 +99,28 @@ func (s *NodeScoreStore) DeleteByProvider(providerName string) error {
 // first. Eligible statuses are pending, failed AND ok: an ok row past its
 // next_due is due for its weekly re-score (pending/testing rows are either
 // not yet claimable or in flight).
-func (s *NodeScoreStore) ListDue(now time.Time, limit int) ([]model.NodeScore, error) {
+//
+// excludeProviders filters automatic work for paused subscriptions out of the
+// batch entirely (so paused backlog cannot starve other providers behind the
+// limit), EXCEPT rows with manual_request set — an explicit user request runs
+// even while its subscription is paused.
+func (s *NodeScoreStore) ListDue(now time.Time, limit int, excludeProviders []string) ([]model.NodeScore, error) {
+	query := `SELECT * FROM node_scores
+		 WHERE status IN ('pending', 'failed', 'ok') AND (next_due IS NULL OR next_due <= ?)`
+	args := []any{model.UTCStamp(now)}
+	if len(excludeProviders) > 0 {
+		placeholders := make([]string, len(excludeProviders))
+		for i, name := range excludeProviders {
+			placeholders[i] = "?"
+			args = append(args, name)
+		}
+		query += fmt.Sprintf(` AND (manual_request = 1 OR provider_name NOT IN (%s))`, strings.Join(placeholders, ", "))
+	}
+	query += ` ORDER BY next_due ASC LIMIT ?`
+	args = append(args, limit)
+
 	var rows []model.NodeScore
-	err := s.db.Select(&rows,
-		`SELECT * FROM node_scores
-		 WHERE status IN ('pending', 'failed', 'ok') AND (next_due IS NULL OR next_due <= ?)
-		 ORDER BY next_due ASC LIMIT ?`, model.UTCStamp(now), limit)
-	if err != nil {
+	if err := s.db.Select(&rows, query, args...); err != nil {
 		return nil, fmt.Errorf("list due node scores: %w", err)
 	}
 	return rows, nil

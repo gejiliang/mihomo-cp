@@ -228,6 +228,11 @@ var migrations = []string{
 	`ALTER TABLE traffic_providers ADD COLUMN reset_minute INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE traffic_providers ADD COLUMN reset_timezone TEXT NOT NULL DEFAULT ''`,
 
+	// 017: persisted manual-refresh request flag for node scores — survives
+	// restarts and lets a paused subscription still serve explicit manual
+	// requests without overloading status/error semantics.
+	`ALTER TABLE node_scores ADD COLUMN manual_request INTEGER NOT NULL DEFAULT 0`,
+
 	// 016: generic egress-isolation underlay settings for the throwaway
 	// scoring instance. Empty values keep safe defaults; deployment-specific
 	// interface/DNS are set via the settings API by the operator.

@@ -323,7 +323,11 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 }
 
 // localUsed sums locally-sampled hourly usage of the linked traffic provider
-// within the subscription's current billing cycle.
+// within the SUBSCRIPTION's current billing cycle (the View displays the
+// subscription's reset schedule — using the shared traffic provider's policy
+// here would compute a window that disagrees with the displayed one). The
+// traffic provider contributes only node-pattern attribution; its own policy
+// is untouched. Unknown subscription reset ⇒ local usage unknown.
 func (s *SubscriptionService) localUsed(sub *model.Subscription, now time.Time) (int64, bool) {
 	if sub.TrafficProviderID == "" || sub.ResetDay < 1 {
 		return 0, false
@@ -332,7 +336,10 @@ func (s *SubscriptionService) localUsed(sub *model.Subscription, now time.Time) 
 	if err != nil {
 		return 0, false
 	}
-	policy := ProviderResetPolicy(*tp)
+	policy := ResetPolicy{Day: sub.ResetDay, Hour: sub.ResetHour, Minute: sub.ResetMinute, Timezone: sub.ResetTimezone}
+	if _, err := policy.Normalize(); err != nil {
+		return 0, false
+	}
 	start := CycleStartAt(now, policy)
 	rows, err := s.traffic.HourlySince(start.Unix())
 	if err != nil {

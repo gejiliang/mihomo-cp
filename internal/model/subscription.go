@@ -94,6 +94,11 @@ type NodeScore struct {
 	LastSuccessAt NullTime `json:"last_success_at" db:"last_success_at"` // last successful scoring
 	NextDue       NullTime `json:"next_due" db:"next_due"`
 	Attempts      int      `json:"attempts" db:"attempts"`
+	// ManualRequest persists an explicit user refresh request: it survives
+	// restarts, executes even while the provider's subscription is paused,
+	// and is consumed when the run finishes. It never changes status/error
+	// semantics.
+	ManualRequest bool     `json:"-" db:"manual_request"`
 	LastError     string   `json:"error" db:"last_error"` // sanitized, no URLs/credentials
 
 	CreatedAt NullTime `json:"created_at" db:"created_at"`
