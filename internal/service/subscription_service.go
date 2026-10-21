@@ -933,9 +933,11 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 		refErr = &RefreshError{Code: "userinfo_failed", Message: "provider entry has no subscription URL to refresh"}
 	}
 
-	// Best-effort runtime provider refresh (downloads new node list).
+	// Best-effort runtime provider refresh (downloads new node list). Native
+	// proxy providers live under /providers/proxies/{name} — the rules
+	// endpoint would 404.
 	if entryErr == nil && s.mihomo != nil {
-		if perr := s.mihomo.RefreshProvider(sub.ProviderName); perr != nil {
+		if perr := s.mihomo.RefreshProxyProvider(sub.ProviderName); perr != nil {
 			msg := "provider refresh failed: " + sanitizeMessage(perr)
 			if refErr == nil {
 				refErr = &RefreshError{Code: "provider_refresh_failed", Message: msg}
