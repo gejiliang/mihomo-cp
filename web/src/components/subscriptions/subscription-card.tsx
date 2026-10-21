@@ -250,6 +250,12 @@ export function SubscriptionCard({
           </p>
         )}
 
+        {!s.enabled && (
+          <p className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+            {t('subscriptions.pausedUsageHint')}
+          </p>
+        )}
+
         {s.stale && s.enabled && (
           <p className="rounded-md border border-amber-600/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-700 dark:text-amber-400">
             {neverFetched ? t('subscriptions.neverFetchedHint') : t('subscriptions.staleHint')}

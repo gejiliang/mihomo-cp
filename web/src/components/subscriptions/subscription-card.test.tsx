@@ -116,6 +116,15 @@ describe('SubscriptionCard', () => {
     expect(screen.getByText(/older than 24 hours/)).toBeInTheDocument();
   });
 
+  it('explains that pausing auto-update does not stop published nodes', () => {
+    renderCard({ ...BASE, enabled: false, status: 'disabled' });
+    expect(screen.getByText('Auto-update paused')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Already-published nodes can still carry traffic/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^Disabled$/)).not.toBeInTheDocument();
+  });
+
   it('disables mutations for readonly users', () => {
     renderCard(BASE, false);
     const buttons = screen.getAllByRole('button');

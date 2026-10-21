@@ -430,7 +430,7 @@ export const en = {
   'subscriptions.statusOk': 'Up to date',
   'subscriptions.statusStale': 'Stale data',
   'subscriptions.statusError': 'Refresh failed',
-  'subscriptions.statusDisabled': 'Disabled',
+  'subscriptions.statusDisabled': 'Auto-update paused',
   'subscriptions.statusPending': 'Waiting for first refresh',
   'subscriptions.provider': 'Native provider',
   'subscriptions.providerNone': 'Not linked',
@@ -448,6 +448,10 @@ export const en = {
   'subscriptions.localUsed': 'Local accounting this cycle',
   'subscriptions.resetInDays': 'in {days} day(s)',
   'subscriptions.cycleEnds': 'Current cycle ends {time}',
+  'subscriptions.pausedHint':
+    'Pausing only stops automatic subscription metadata refresh and node scoring. Already-published provider nodes keep carrying traffic until group references are removed and the provider is deleted and published.',
+  'subscriptions.pausedUsageHint':
+    'Automatic subscription refresh and scoring are paused. Already-published nodes can still carry traffic; to stop using them, remove the proxy-group references first, then delete the provider and publish the change.',
   'subscriptions.neverFetchedHint':
     'No vendor data yet. Refresh to fetch quota, expiry and reset information.',
   'subscriptions.staleHint':
@@ -456,7 +460,7 @@ export const en = {
   'subscriptions.urlPlaceholder': 'https://provider.example/subscription',
   'subscriptions.urlKeepHint': 'Leave blank to keep the stored URL. It is never shown again in full.',
   'subscriptions.urlMaskedHint': 'URLs are masked in the UI; full URLs are never returned to the browser.',
-  'subscriptions.enabled': 'Enabled',
+  'subscriptions.enabled': 'Auto-update subscription info and scoring',
   'subscriptions.quota': 'Quota',
   'subscriptions.total': 'Total',
   'subscriptions.used': 'Used',

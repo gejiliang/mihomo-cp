@@ -321,6 +321,7 @@ export function SubscriptionForm({
               />
               {t('subscriptions.enabled')}
             </label>
+            <p className="text-xs text-muted-foreground">{t('subscriptions.pausedHint')}</p>
           </section>
 
           <Separator />
