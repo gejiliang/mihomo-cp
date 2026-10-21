@@ -120,8 +120,8 @@ describe('NodeScoreDetail', () => {
         },
       },
     });
-    expect(screen.getAllByText('Same range (not exact)').length).toBeGreaterThan(0);
-    expect(screen.getByText(/range-level/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Declared range (not exact)').length).toBeGreaterThan(0);
+    expect(screen.getByText(/neighbor IP inside the declared range/i)).toBeInTheDocument();
   });
 
   it('surfaces mismatched IPs with an explicit warning', () => {

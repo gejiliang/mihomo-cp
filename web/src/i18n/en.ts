@@ -550,16 +550,16 @@ export const en = {
   'nodeScores.trustScore': 'Claude Trust Score',
   'nodeScores.exitIp': 'Egress IP',
   'nodeScores.exitIpUnknown': 'Unknown',
-  'nodeScores.rangeOnly': 'Range-level data ({cidr})',
+  'nodeScores.rangeOnly': 'Neighbor IP in declared range ({cidr})',
   'nodeScores.ipMatch': 'IP match',
   'nodeScores.matchExact': 'Exact address',
-  'nodeScores.matchCidr': 'Same range (not exact)',
+  'nodeScores.matchCidr': 'Declared range (not exact)',
   'nodeScores.matchMismatch': 'Different IP',
   'nodeScores.matchUnknown': 'Unknown',
   'nodeScores.ipMismatchHint':
     'The vendor returned data for a different address. It is not presented as this node’s score.',
   'nodeScores.cidrHint':
-    'The vendor only returned data for the surrounding range. Treat it as range-level, not a precise single-IP score.',
+    'The vendor returned a neighbor IP inside the declared range. Use it as a reference only, not as an exact score for the queried IP.',
   'nodeScores.country': 'Country',
   'nodeScores.asn': 'ASN',
   'nodeScores.asnOrg': 'ASN organization',
@@ -620,7 +620,7 @@ export const en = {
   'nodeScores.errorCode': 'Error code',
   'nodeScores.scoreUnavailable': 'Score unavailable',
   'nodeScores.noMismatch': 'No mismatch',
-  'nodeScores.rangeBadge': 'Range only',
+  'nodeScores.rangeBadge': 'Neighbor IP',
   'nodeScores.attempts': 'Attempts',
   'nodeScores.noFlags': 'None detected',
 
