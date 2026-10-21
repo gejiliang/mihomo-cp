@@ -76,7 +76,7 @@ func TestSubscriptionStoreUserinfoPresenceRoundTrip(t *testing.T) {
 
 	got.UserinfoCountersSeen = true
 	got.UserinfoUpload, got.UserinfoDownload = 0, 0
-	if err := store.Update(got); err != nil {
+	if err := store.UpdateSnapshot(got); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	updated, err := store.Get(sub.ID)
@@ -383,3 +383,93 @@ func TestNodeScoreStoreListDueComparesAbsoluteTimeAcrossZones(t *testing.T) {
 }
 
 const RefreshIntervalForStoreTest = 7 * 24 * time.Hour
+
+func TestSubscriptionFieldSpecificUpdatesDoNotClobber(t *testing.T) {
+	db := openStoreTestDB(t)
+	store := NewSubscriptionStore(db)
+	now := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
+	sub := &model.Subscription{
+		ID: "sub-fields", Name: "Original", Enabled: true,
+		ProviderName: "example-provider", ProviderSource: "created",
+		ResetDay: 10, ResetHour: 12, ResetMinute: 0, ResetTimezone: "Asia/Shanghai",
+		QuotaBytes: 100, ManualExpire: 1000,
+	}
+	if err := store.Create(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	// A snapshot writer read the row, then a metadata edit lands before the
+	// snapshot write. The field-specific snapshot update must not restore the
+	// stale metadata columns it was carrying.
+	stale, err := store.Get(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited, err := store.Get(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited.Name = "Edited During Refresh"
+	edited.Enabled = false
+	edited.ResetDay = 0
+	edited.ResetHour = 0
+	edited.ResetMinute = 0
+	edited.ResetTimezone = ""
+	edited.QuotaBytes = 0
+	edited.ManualExpire = 0
+	if err := store.UpdateMetadata(edited); err != nil {
+		t.Fatal(err)
+	}
+
+	stale.UserinfoUpload = 500
+	stale.UserinfoDownload = 600
+	stale.UserinfoTotal = 214748364800
+	stale.UserinfoCountersSeen = true
+	stale.UserinfoFetchedAt = model.NewNullTime(now)
+	stale.LastSuccessAt = model.NewNullTime(now)
+	if err := store.UpdateSnapshot(stale); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Edited During Refresh" || got.Enabled {
+		t.Errorf("snapshot write clobbered metadata: name=%q enabled=%v", got.Name, got.Enabled)
+	}
+	if got.ResetDay != 0 || got.ResetTimezone != "" || got.QuotaBytes != 0 || got.ManualExpire != 0 {
+		t.Errorf("snapshot write clobbered metadata supplements: %+v", got)
+	}
+	if got.UserinfoUpload != 500 || got.UserinfoDownload != 600 || !got.UserinfoCountersSeen {
+		t.Errorf("snapshot write did not persist new snapshot: %+v", got)
+	}
+
+	// Conversely, a metadata writer holding an old snapshot must not clobber
+	// the fresh vendor snapshot.
+	beforeMetadata, err := store.Get(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshSnapshot := *beforeMetadata
+	freshSnapshot.UserinfoUpload = 999
+	freshSnapshot.UserinfoDownload = 888
+	freshSnapshot.UserinfoFetchedAt = model.NewNullTime(now.Add(time.Hour))
+	if err := store.UpdateSnapshot(&freshSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	beforeMetadata.Name = "Renamed Later"
+	if err := store.UpdateMetadata(beforeMetadata); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.Get(sub.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Renamed Later" {
+		t.Errorf("metadata write did not apply: %q", got.Name)
+	}
+	if got.UserinfoUpload != 999 || got.UserinfoDownload != 888 {
+		t.Errorf("metadata write clobbered fresh snapshot: upload=%d download=%d", got.UserinfoUpload, got.UserinfoDownload)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -320,7 +321,7 @@ func TestScanAndEnqueuePausesDisabledSubscriptionProvider(t *testing.T) {
 		t.Fatalf("get subscription: %v", err)
 	}
 	stored.Enabled = true
-	if err := env.subs.Update(stored); err != nil {
+	if err := env.subs.UpdateMetadata(stored); err != nil {
 		t.Fatal(err)
 	}
 	env.svc.ScanAndEnqueue()
@@ -1068,8 +1069,8 @@ func TestPinGroupSelectionsUsesReadOnlyCurrentMember(t *testing.T) {
 	topo := &IsolationTopology{
 		Target: "A",
 		Nodes: []map[string]any{
-			{"name": "A", "type": "ss", "server": "203.0.113.10", "port": 8388},
-			{"name": "B", "type": "ss", "server": "198.51.100.10", "port": 8388},
+			{"name": "A", "type": "ss", "server": "203.0.113.10", "port": 8388, "cipher": "aes-128-gcm", "password": "example-pass"},
+			{"name": "B", "type": "ss", "server": "198.51.100.10", "port": 8388, "cipher": "aes-128-gcm", "password": "example-pass"},
 		},
 		Groups: []map[string]any{
 			{"name": "Relay-Group", "type": "url-test", "proxies": []string{"A", "B"}},
@@ -1079,8 +1080,8 @@ func TestPinGroupSelectionsUsesReadOnlyCurrentMember(t *testing.T) {
 		t.Fatalf("pinGroupSelections: %v", err)
 	}
 	group := topo.Groups[0]
-	if group["type"] != "selector" {
-		t.Errorf("pinned group type = %v, want selector", group["type"])
+	if group["type"] != "select" {
+		t.Errorf("pinned group type = %v, want select", group["type"])
 	}
 	proxies, ok := group["proxies"].([]string)
 	if !ok || len(proxies) != 1 || proxies[0] != "B" {
@@ -1089,7 +1090,9 @@ func TestPinGroupSelectionsUsesReadOnlyCurrentMember(t *testing.T) {
 	if len(methods) != 1 || methods[0] != "GET /proxies/Relay-Group" {
 		t.Errorf("runtime mock requests = %v, want exactly one GET", methods)
 	}
-	cfg := buildIsolationConfig(topo, 34567, IsolationConfig{})
+	cfg := buildIsolationConfig(topo, 34567, IsolationConfig{
+		DNSServers: []string{"https://223.5.5.5/dns-query"},
+	})
 	var doc map[string]any
 	if err := yaml.Unmarshal(cfg, &doc); err != nil {
 		t.Fatal(err)
@@ -1099,12 +1102,24 @@ func TestPinGroupSelectionsUsesReadOnlyCurrentMember(t *testing.T) {
 		t.Fatalf("rendered groups = %#v", doc["proxy-groups"])
 	}
 	rendered, _ := renderedGroups[0].(map[string]any)
-	if rendered["type"] != "selector" {
-		t.Errorf("rendered group type = %v, want selector", rendered["type"])
+	if rendered["type"] != "select" {
+		t.Errorf("rendered group type = %v, want select", rendered["type"])
 	}
 	renderedProxies, _ := rendered["proxies"].([]any)
 	if len(renderedProxies) != 1 || renderedProxies[0] != "B" {
 		t.Errorf("rendered group proxies = %#v, want only B", rendered["proxies"])
+	}
+
+	if bin := os.Getenv("MIHOMO_TEST_BINARY"); bin != "" {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "pinned-config.yaml")
+		if err := os.WriteFile(path, cfg, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(bin, "-t", "-d", dir, "-f", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("mihomo -t rejected pinned selector config: %v\n%s\n%s", err, out, cfg)
+		}
 	}
 }
 
