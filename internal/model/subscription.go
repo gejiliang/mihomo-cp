@@ -98,8 +98,8 @@ type NodeScore struct {
 	// restarts, executes even while the provider's subscription is paused,
 	// and is consumed when the run finishes. It never changes status/error
 	// semantics.
-	ManualRequest bool     `json:"-" db:"manual_request"`
-	LastError     string   `json:"error" db:"last_error"` // sanitized, no URLs/credentials
+	ManualRequest bool   `json:"-" db:"manual_request"`
+	LastError     string `json:"error" db:"last_error"` // sanitized, no URLs/credentials
 
 	CreatedAt NullTime `json:"created_at" db:"created_at"`
 	UpdatedAt NullTime `json:"updated_at" db:"updated_at"`
