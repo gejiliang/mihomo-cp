@@ -85,6 +85,7 @@ export function SubscriptionForm({
   const [enabled, setEnabled] = useState(true);
   const [quotaGB, setQuotaGB] = useState('');
   const [manualExpiry, setManualExpiry] = useState('');
+  const [resetConfigured, setResetConfigured] = useState(false);
   const [resetDay, setResetDay] = useState('1');
   const [resetHour, setResetHour] = useState('0');
   const [resetMinute, setResetMinute] = useState('0');
@@ -111,10 +112,12 @@ export function SubscriptionForm({
       setManualExpiry(
         subscription.expires_source === 'manual' ? toDateInput(subscription.expires_at) : ''
       );
-      setResetDay(String(subscription.reset_day || 1));
+      const hasReset = subscription.reset_day >= 1;
+      setResetConfigured(hasReset);
+      setResetDay(hasReset ? String(subscription.reset_day) : '1');
       setResetHour(String(subscription.reset_hour || 0));
       setResetMinute(String(subscription.reset_minute || 0));
-      setTimezone(subscription.timezone || '');
+      setTimezone(subscription.timezone || (hasReset ? browserTimezone() : ''));
       setTrafficProviderID(subscription.traffic_provider_id || '');
     } else {
       setName('');
@@ -123,6 +126,7 @@ export function SubscriptionForm({
       setEnabled(true);
       setQuotaGB('');
       setManualExpiry('');
+      setResetConfigured(false);
       setResetDay('1');
       setResetHour('0');
       setResetMinute('0');
@@ -164,24 +168,25 @@ export function SubscriptionForm({
     const trimmedProvider = providerName.trim() || trimmedName;
     const trimmedUrl = url.trim();
     const quota = quotaGB.trim() === '' ? null : Number(quotaGB);
-    const day = Number(resetDay);
-    const hour = Number(resetHour);
-    const minute = Number(resetMinute);
+    const day = resetConfigured ? Number(resetDay) : 0;
+    const hour = resetConfigured ? Number(resetHour) : 0;
+    const minute = resetConfigured ? Number(resetMinute) : 0;
 
     if (!trimmedName) {
       setFormError(t('subscriptions.formInvalid'));
       return;
     }
     if (
-      !Number.isInteger(day) ||
-      day < 1 ||
-      day > 31 ||
-      !Number.isInteger(hour) ||
-      hour < 0 ||
-      hour > 23 ||
-      !Number.isInteger(minute) ||
-      minute < 0 ||
-      minute > 59
+      resetConfigured &&
+      (!Number.isInteger(day) ||
+        day < 1 ||
+        day > 31 ||
+        !Number.isInteger(hour) ||
+        hour < 0 ||
+        hour > 23 ||
+        !Number.isInteger(minute) ||
+        minute < 0 ||
+        minute > 59)
     ) {
       setFormError(t('subscriptions.formInvalid'));
       return;
@@ -190,7 +195,7 @@ export function SubscriptionForm({
       setFormError(t('subscriptions.formInvalid'));
       return;
     }
-    if (!validTimezone(timezone.trim())) {
+    if (resetConfigured && !validTimezone(timezone.trim())) {
       setFormError(t('subscriptions.formInvalid'));
       return;
     }
@@ -218,7 +223,7 @@ export function SubscriptionForm({
       reset_day: day,
       reset_hour: hour,
       reset_minute: minute,
-      timezone: timezone.trim(),
+      timezone: resetConfigured ? timezone.trim() : '',
     };
     // Linking an existing provider must not send a URL (the backend rejects
     // it and would otherwise overwrite the shared provider entry).
@@ -348,7 +353,23 @@ export function SubscriptionForm({
                   : ''}
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border border-input"
+                checked={resetConfigured}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setResetConfigured(checked);
+                  if (checked && (!resetDay || resetDay === '0')) setResetDay('1');
+                }}
+              />
+              {t('subscriptions.resetConfigure')}
+            </label>
+            {!resetConfigured && (
+              <p className="text-xs text-muted-foreground">{t('subscriptions.resetNoneHint')}</p>
+            )}
+            <div className={`grid grid-cols-3 gap-3 ${resetConfigured ? '' : 'opacity-60'}`}>
               <div className="space-y-1.5">
                 <Label htmlFor="subscription-reset-day">{t('subscriptions.resetDay')}</Label>
                 <Input
@@ -356,6 +377,7 @@ export function SubscriptionForm({
                   type="number"
                   min={1}
                   max={31}
+                  disabled={!resetConfigured}
                   value={resetDay}
                   onChange={(e) => setResetDay(e.target.value)}
                 />
@@ -367,6 +389,7 @@ export function SubscriptionForm({
                   type="number"
                   min={0}
                   max={23}
+                  disabled={!resetConfigured}
                   value={resetHour}
                   onChange={(e) => setResetHour(e.target.value)}
                 />
@@ -378,6 +401,7 @@ export function SubscriptionForm({
                   type="number"
                   min={0}
                   max={59}
+                  disabled={!resetConfigured}
                   value={resetMinute}
                   onChange={(e) => setResetMinute(e.target.value)}
                 />
@@ -387,6 +411,7 @@ export function SubscriptionForm({
               <Label htmlFor="subscription-timezone">{t('subscriptions.timezone')}</Label>
               <Input
                 id="subscription-timezone"
+                disabled={!resetConfigured}
                 value={timezone}
                 list="subscription-timezones"
                 onChange={(e) => handleTimezoneChange(e.target.value)}

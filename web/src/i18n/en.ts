@@ -479,6 +479,10 @@ export const en = {
   'subscriptions.expirySourceUnknown': 'Unknown',
   'subscriptions.nextReset': 'Next reset',
   'subscriptions.resetSchedule': 'Reset schedule',
+  'subscriptions.resetConfigure': 'Configure monthly reset schedule',
+  'subscriptions.resetNone': 'No monthly reset policy (unknown)',
+  'subscriptions.resetNoneHint':
+    'Unchecked means no monthly reset policy (unknown). Changing other fields will not invent a schedule.',
   'subscriptions.resetDay': 'Reset day',
   'subscriptions.resetHour': 'Hour',
   'subscriptions.resetMinute': 'Minute',

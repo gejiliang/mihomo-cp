@@ -97,11 +97,14 @@ export function SubscriptionCard({
   const lastRefresh = formatDateTime(s.last_refresh_at, locale);
   const cycleEnd = formatApiDateTime(s.cycle_end, locale, s.timezone);
   const timezone = s.timezone || t('subscriptions.serverTimezone');
-  const schedule = [
-    `${t('subscriptions.resetDay')} ${s.reset_day || t('common.unknown')}`,
-    `${String(s.reset_hour).padStart(2, '0')}:${String(s.reset_minute).padStart(2, '0')}`,
-    timezone,
-  ].join(' · ');
+  const schedule =
+    s.reset_day >= 1
+      ? [
+          `${t('subscriptions.resetDay')} ${s.reset_day}`,
+          `${String(s.reset_hour).padStart(2, '0')}:${String(s.reset_minute).padStart(2, '0')}`,
+          timezone,
+        ].join(' · ')
+      : t('subscriptions.resetNone');
 
   return (
     <Card>
@@ -222,7 +225,7 @@ export function SubscriptionCard({
             {t('subscriptions.nextReset')}
           </span>
           <span className="text-right">
-            {nextReset ?? t('common.unknown')}
+            {nextReset ?? (s.reset_day >= 1 ? t('common.unknown') : t('subscriptions.resetNone'))}
             {resetIn !== null && (
               <span className="ml-2 text-xs text-muted-foreground">
                 {t('subscriptions.resetInDays', { days: resetIn })}

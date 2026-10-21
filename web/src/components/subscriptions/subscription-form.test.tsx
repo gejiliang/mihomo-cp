@@ -128,6 +128,84 @@ describe('SubscriptionForm', () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it('preserves an unknown reset policy when only the name changes', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        reset_day: 0,
+        reset_hour: 0,
+        reset_minute: 0,
+        timezone: null,
+      },
+    });
+
+    const toggle = screen.getByLabelText('Configure monthly reset schedule');
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByLabelText('Reset day')).toBeDisabled();
+
+    const name = screen.getByLabelText('Name');
+    await user.clear(name);
+    await user.type(name, 'Renamed only');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.reset_day).toBe(0);
+    expect(input.reset_hour).toBe(0);
+    expect(input.reset_minute).toBe(0);
+    expect(input.timezone).toBe('');
+  });
+
+  it('sends an explicitly configured schedule', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        reset_day: 0,
+        reset_hour: 0,
+        reset_minute: 0,
+        timezone: null,
+      },
+    });
+
+    await user.click(screen.getByLabelText('Configure monthly reset schedule'));
+    const day = screen.getByLabelText('Reset day');
+    await user.clear(day);
+    await user.type(day, '10');
+    const hour = screen.getByLabelText('Hour');
+    await user.clear(hour);
+    await user.type(hour, '12');
+    const timezone = screen.getByLabelText('Timezone');
+    await user.clear(timezone);
+    await user.type(timezone, 'Asia/Shanghai');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.reset_day).toBe(10);
+    expect(input.reset_hour).toBe(12);
+    expect(input.reset_minute).toBe(0);
+    expect(input.timezone).toBe('Asia/Shanghai');
+  });
+
+  it('explicitly clears a known schedule when the choice is unchecked', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm();
+
+    const toggle = screen.getByLabelText('Configure monthly reset schedule');
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.reset_day).toBe(0);
+    expect(input.reset_hour).toBe(0);
+    expect(input.reset_minute).toBe(0);
+    expect(input.timezone).toBe('');
+  });
+
   it('prefills a manual expiry but not a vendor expiry', () => {
     renderForm({
       subscription: {
