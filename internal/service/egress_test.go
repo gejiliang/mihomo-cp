@@ -354,31 +354,8 @@ func TestLoadProviderNodesFromCache(t *testing.T) {
 	}
 }
 
-func TestNeedsUnderlayBindingAndInterfaceSuffix(t *testing.T) {
+func TestDeriveIfaceSuffix(t *testing.T) {
 	cases := []struct {
-		name string
-		raw  string
-		want bool
-	}{
-		{name: "plain", raw: `{}`, want: false},
-		{name: "TUN enabled", raw: `{"tun":{"enable":true}}`, want: true},
-		{name: "TUN disabled", raw: `{"tun":{"enable":false}}`, want: false},
-		{name: "fake-ip DNS", raw: `{"dns":{"enhanced-mode":"fake-ip"}}`, want: true},
-		{name: "redir-host DNS", raw: `{"dns":{"enhanced-mode":"redir-host"}}`, want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var cfg map[string]json.RawMessage
-			if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
-				t.Fatal(err)
-			}
-			if got := needsUnderlayBinding(cfg); got != tc.want {
-				t.Errorf("needsUnderlayBinding = %v, want %v", got, tc.want)
-			}
-		})
-	}
-
-	suffixCases := []struct {
 		name string
 		raw  string
 		want string
@@ -388,7 +365,7 @@ func TestNeedsUnderlayBindingAndInterfaceSuffix(t *testing.T) {
 		{name: "contradictory suffixes", raw: `{"dns":{"nameserver":["https://223.5.5.5/dns-query#test0","tls://1.1.1.1#test1"]}}`, want: ""},
 		{name: "no suffix", raw: `{"dns":{"nameserver":["https://223.5.5.5/dns-query"]}}`, want: ""},
 	}
-	for _, tc := range suffixCases {
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var cfg map[string]json.RawMessage
 			if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
@@ -416,38 +393,97 @@ func newUnderlayTestService(t *testing.T) (*ScoringService, *store.ConfigStore) 
 	return &ScoringService{configs: configs}, configs
 }
 
-func TestUnderlayInterfaceGuard(t *testing.T) {
+func findNonLoopbackInterface(t *testing.T) string {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Skipf("list interfaces: %v", err)
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+				return iface.Name
+			}
+		}
+	}
+	t.Skip("no usable non-loopback interface in this environment")
+	return ""
+}
+
+func TestUnderlayInterfaceRequiresUsableNonLoopback(t *testing.T) {
 	svc, configs := newUnderlayTestService(t)
 
-	if got, err := svc.underlayInterface(""); err != nil || got != "" {
-		t.Errorf("plain config: got %q, %v; want empty and no error", got, err)
-	}
-
-	if err := configs.Update(json.RawMessage(`{"tun":{"enable":true}}`)); err != nil {
+	// Runtime flags in the managed draft do not justify an unbound probe.
+	if err := configs.Update(json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.underlayInterface(""); err == nil {
-		t.Fatal("TUN-enabled config without an underlay must refuse the probe")
+		t.Fatal("plain draft without a usable underlay must refuse the probe")
 	}
-	if got, err := svc.underlayInterface("test-underlay0"); err != nil || got != "test-underlay0" {
-		t.Errorf("explicit underlay = %q, %v; want configured value", got, err)
-	}
-
-	if _, err := net.InterfaceByName("lo"); err != nil {
-		t.Skip("loopback interface not available")
-	}
-	if err := configs.Update(json.RawMessage(`{"dns":{"enhanced-mode":"fake-ip","nameserver":["https://223.5.5.5/dns-query#lo"]}}`)); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := svc.underlayInterface(""); err != nil || got != "lo" {
-		t.Errorf("derived underlay = %q, %v; want lo", got, err)
-	}
-
-	if err := configs.Update(json.RawMessage(`{"dns":{"enhanced-mode":"fake-ip","nameserver":["https://223.5.5.5/dns-query#no-such-iface-xyz"]}}`)); err != nil {
+	if err := configs.Update(json.RawMessage(`{"tun":{"enable":false},"dns":{"enhanced-mode":"redir-host"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.underlayInterface(""); err == nil {
-		t.Fatal("non-existent derived interface must refuse the probe")
+		t.Fatal("TUN/fake-ip disabled must not allow an unbound probe")
+	}
+	if err := configs.Update(json.RawMessage(`{"tun":{"enable":true},"dns":{"enhanced-mode":"fake-ip"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.underlayInterface(""); err == nil {
+		t.Fatal("TUN/fake-ip enabled without a usable underlay must refuse the probe")
+	}
+
+	if err := configs.Update(json.RawMessage(`not-json`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.underlayInterface(""); err == nil {
+		t.Fatal("malformed managed draft must refuse an unbound probe")
+	}
+
+	if _, err := svc.underlayInterface("lo"); err == nil {
+		t.Fatal("loopback interface must not be accepted as the scoring underlay")
+	}
+	if _, err := svc.underlayInterface("no-such-iface-xyz"); err == nil {
+		t.Fatal("non-existent configured interface must be rejected")
+	}
+
+	iface := findNonLoopbackInterface(t)
+	if err := configs.Update(json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.underlayInterface(iface); err != nil || got != iface {
+		t.Errorf("configured usable underlay = %q, %v; want %q", got, err, iface)
+	}
+	if err := configs.Update(json.RawMessage(`{"tun":{"enable":true},"dns":{"enhanced-mode":"redir-host"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.underlayInterface(iface); err != nil || got != iface {
+		t.Errorf("configured underlay with TUN on = %q, %v; want %q", got, err, iface)
+	}
+
+	// A verified explicit suffix is enough regardless of draft runtime flags.
+	if err := configs.Update(json.RawMessage(fmt.Sprintf(
+		`{"tun":{"enable":false},"dns":{"nameserver":["https://223.5.5.5/dns-query#%s"]}}`, iface,
+	))); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.underlayInterface(""); err != nil || got != iface {
+		t.Errorf("verified explicit suffix = %q, %v; want %q", got, err, iface)
+	}
+
+	if err := configs.Update(json.RawMessage(`{"dns":{"nameserver":["https://223.5.5.5/dns-query#lo"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.underlayInterface(""); err == nil {
+		t.Fatal("loopback suffix must not be accepted as an underlay")
 	}
 }
 

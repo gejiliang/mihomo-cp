@@ -17,23 +17,32 @@ import (
 
 func TestIPMatchScope(t *testing.T) {
 	cases := []struct {
-		name       string
-		query      string
-		response   string
-		want       string
+		name     string
+		query    string
+		response string
+		cidr     string
+		want     string
 	}{
-		{name: "exact", query: "203.0.113.10", response: "203.0.113.10", want: model.IPMatchExact},
-		{name: "same /24", query: "203.0.113.10", response: "203.0.113.11", want: model.IPMatchCIDR},
-		{name: "different /24", query: "203.0.113.10", response: "198.51.100.7", want: model.IPMatchMismatch},
+		{name: "exact no cidr", query: "203.0.113.10", response: "203.0.113.10", want: model.IPMatchExact},
+		{name: "exact IPv4 with cidr", query: "203.0.113.10", response: "203.0.113.10", cidr: "203.0.113.0/24", want: model.IPMatchExact},
+		{name: "equivalent IPv6 text is exact", query: "2001:db8::1", response: "2001:0db8:0000:0000:0000:0000:0000:0001", want: model.IPMatchExact},
+		{name: "same /24 without declared cidr is mismatch", query: "203.0.113.10", response: "203.0.113.11", want: model.IPMatchMismatch},
+		{name: "same /24 with covering cidr is neighbor", query: "203.0.113.10", response: "203.0.113.11", cidr: "203.0.113.0/24", want: model.IPMatchCIDR},
+		{name: "same /24 with non-covering cidr is mismatch", query: "203.0.113.10", response: "203.0.113.11", cidr: "198.51.100.0/24", want: model.IPMatchMismatch},
+		{name: "different /24 with covering cidr is neighbor", query: "203.0.113.10", response: "198.51.100.7", cidr: "0.0.0.0/0", want: model.IPMatchCIDR},
+		{name: "different /24 without cidr is mismatch", query: "203.0.113.10", response: "198.51.100.7", want: model.IPMatchMismatch},
 		{name: "missing response", query: "203.0.113.10", response: "", want: model.IPMatchUnknown},
 		{name: "invalid response", query: "203.0.113.10", response: "not-an-ip", want: model.IPMatchMismatch},
-		{name: "IPv6 same /64", query: "2001:db8::1", response: "2001:db8::2", want: model.IPMatchCIDR},
-		{name: "IPv6 different /64", query: "2001:db8::1", response: "2001:db8:1::1", want: model.IPMatchMismatch},
+		{name: "IPv6 same /64 without declared cidr is mismatch", query: "2001:db8::1", response: "2001:db8::2", want: model.IPMatchMismatch},
+		{name: "IPv6 same /64 with covering cidr is neighbor", query: "2001:db8::1", response: "2001:db8::2", cidr: "2001:db8::/64", want: model.IPMatchCIDR},
+		{name: "IPv6 different /64 with covering cidr is neighbor", query: "2001:db8::1", response: "2001:db8:1::1", cidr: "2001:db8::/32", want: model.IPMatchCIDR},
+		{name: "IPv6 different /64 without cidr is mismatch", query: "2001:db8::1", response: "2001:db8:1::1", want: model.IPMatchMismatch},
+		{name: "invalid declared cidr is mismatch", query: "203.0.113.10", response: "203.0.113.11", cidr: "not-a-cidr", want: model.IPMatchMismatch},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := IPMatchScope(tc.query, tc.response); got != tc.want {
-				t.Errorf("IPMatchScope(%q, %q) = %q, want %q", tc.query, tc.response, got, tc.want)
+			if got := IPMatchScope(tc.query, tc.response, tc.cidr); got != tc.want {
+				t.Errorf("IPMatchScope(%q, %q, %q) = %q, want %q", tc.query, tc.response, tc.cidr, got, tc.want)
 			}
 		})
 	}
@@ -220,8 +229,8 @@ func TestFetchIPLookupSubsetAndValidation(t *testing.T) {
 			"asn": 64500, "asOrganization": "Example ISP", "country": "United States",
 			"countryCode": "us", "company_type": "isp", "isResidential": true,
 			"is_datacenter": false, "is_vpn": false, "is_proxy": false, "is_tor": false,
-			"abuser_score": "0.001 (Low)",
-			"ai_verdict": map[string]any{"label": "Clean residential", "confidence": 90},
+			"abuser_score":    "0.001 (Low)",
+			"ai_verdict":      map[string]any{"label": "Clean residential", "confidence": 90},
 			"related_domains": []string{"should-not-be-stored.example"},
 			"geo_sources":     []map[string]any{{"src": "g1", "country": "United States"}},
 		},
@@ -304,5 +313,56 @@ func TestNetCoffeeMalformedJSON(t *testing.T) {
 	}
 	if _, _, err := client.FetchIPLookup(context.Background(), "203.0.113.10"); err == nil {
 		t.Fatal("expected parse error for malformed lookup response")
+	}
+}
+
+func TestBothAdaptersRequireDeclaredCIDRForNeighbor(t *testing.T) {
+	responses := map[string]map[string]any{
+		"/api/iprisk/203.0.113.10": {
+			"ip": "203.0.113.11", "cidr": "203.0.113.0/24", "trust_score": 70,
+		},
+		"/api/iprisk/203.0.113.20": {
+			"ip": "203.0.113.21", "trust_score": 70,
+		},
+		"/api/ip/lookup/203.0.113.10": {
+			"ip": "203.0.113.11", "cidr": "203.0.113.0/24", "trust_score": 70,
+		},
+		"/api/ip/lookup/203.0.113.20": {
+			"ip": "203.0.113.21", "trust_score": 70,
+		},
+	}
+	client, _, _ := newNetCoffeeTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		resp, ok := responses[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+	})
+
+	claudeWithCIDR, err := client.FetchClaudeTrust(context.Background(), "203.0.113.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeWithCIDR.IPMatch != model.IPMatchCIDR {
+		t.Errorf("Claude adapter with declared /24 = %q, want cidr", claudeWithCIDR.IPMatch)
+	}
+	claudeWithoutCIDR, err := client.FetchClaudeTrust(context.Background(), "203.0.113.20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claudeWithoutCIDR.IPMatch != model.IPMatchMismatch {
+		t.Errorf("Claude adapter neighbor without declared cidr = %q, want mismatch", claudeWithoutCIDR.IPMatch)
+	}
+
+	if _, match, err := client.FetchIPLookup(context.Background(), "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	} else if match != model.IPMatchCIDR {
+		t.Errorf("lookup adapter with declared /24 = %q, want cidr", match)
+	}
+	if _, match, err := client.FetchIPLookup(context.Background(), "203.0.113.20"); err != nil {
+		t.Fatal(err)
+	} else if match != model.IPMatchMismatch {
+		t.Errorf("lookup adapter neighbor without declared cidr = %q, want mismatch", match)
 	}
 }

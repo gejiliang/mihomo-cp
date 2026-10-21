@@ -563,6 +563,17 @@ func (f *fakeEgressProber) Probe(ctx context.Context, topo *IsolationTopology, i
 
 func TestAutomaticWeeklyRefreshDispatchesOKRowAfterRestart(t *testing.T) {
 	env := newScoringTestEnv(t)
+	// The isolation guard now requires a verified non-loopback underlay even
+	// when the managed draft has no TUN/fake-ip. Use a real local interface.
+	iface := findNonLoopbackInterface(t)
+	st, err := env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.IsolationInterface = iface
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
 	proxy := env.addStaticProxy(t, "Weekly-Refresh")
 	due := env.now.Add(RefreshInterval)
 
@@ -645,5 +656,62 @@ func TestAutomaticWeeklyRefreshDispatchesOKRowAfterRestart(t *testing.T) {
 	}
 	if !nullTimeAt(updated.LastSuccessAt, due) {
 		t.Errorf("last success = %+v, want boundary", updated.LastSuccessAt)
+	}
+}
+
+func TestScanAndEnqueueDetectsProviderCacheChangesWithoutInvalidate(t *testing.T) {
+	env := newScoringTestEnv(t)
+	env.setProvider(t, "PeriodicProvider", "providers/periodic.yaml", nil)
+	env.writeProviderCache(t, "providers/periodic.yaml", []map[string]any{
+		scoringTestNode("HK-01", "203.0.113.10"),
+		scoringTestNode("JP-01", "198.51.100.10"),
+	})
+
+	env.svc.ScanAndEnqueue()
+	hkKey := store.NewNodeKey("provider", "PeriodicProvider", "HK-01")
+	jpKey := store.NewNodeKey("provider", "PeriodicProvider", "JP-01")
+	sgKey := store.NewNodeKey("provider", "PeriodicProvider", "SG-01")
+	hk, err := env.scores.Get(hkKey)
+	if err != nil {
+		t.Fatalf("initial provider inventory missing HK row: %v", err)
+	}
+	if _, err := env.scores.Get(jpKey); err != nil {
+		t.Fatalf("initial provider inventory missing JP row: %v", err)
+	}
+	oldFP := hk.Fingerprint
+	lastSuccess := env.now.Add(-24 * time.Hour)
+	hk.Status = model.ScoreStatusOK
+	hk.LastSuccessAt = model.NewNullTime(lastSuccess)
+	hk.NextDue = model.NewNullTime(env.now.Add(7 * 24 * time.Hour))
+	if err := env.scores.Upsert(hk); err != nil {
+		t.Fatal(err)
+	}
+
+	// Periodic reconciliation must notice the on-disk cache change on its own:
+	// no InvalidateProviderCache call here.
+	env.writeProviderCache(t, "providers/periodic.yaml", []map[string]any{
+		scoringTestNode("HK-01", "203.0.113.99"),
+		scoringTestNode("SG-01", "192.0.2.30"),
+	})
+	env.svc.ScanAndEnqueue()
+
+	changedHK, err := env.scores.Get(hkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedHK.Fingerprint == oldFP {
+		t.Error("periodic scan kept the stale provider cache; changed HK fingerprint not detected")
+	}
+	if changedHK.Status != model.ScoreStatusPending || !nullTimeAt(changedHK.NextDue, env.now) {
+		t.Errorf("changed HK node was not requeued: status=%s next=%+v", changedHK.Status, changedHK.NextDue)
+	}
+	if !nullTimeAt(changedHK.LastSuccessAt, lastSuccess) {
+		t.Errorf("changed HK node lost last success history: %+v", changedHK.LastSuccessAt)
+	}
+	if _, err := env.scores.Get(jpKey); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("removed provider node JP-01 still has a row: %v", err)
+	}
+	if _, err := env.scores.Get(sgKey); err != nil {
+		t.Errorf("new provider node SG-01 was not discovered by periodic scan: %v", err)
 	}
 }
