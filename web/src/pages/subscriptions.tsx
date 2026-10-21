@@ -90,7 +90,7 @@ export default function SubscriptionsPage() {
     try {
       const res = await subscriptionsApi.remove(deleting.id);
       toast.success(t('subscriptions.deleted'));
-      if (res.data?.draft_changed !== false) setDraftNotice(true);
+      if (res.data?.draft_changed === true) setDraftNotice(true);
       setDeleting(null);
       await fetchAll();
     } catch (err) {
@@ -249,9 +249,17 @@ export default function SubscriptionsPage() {
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
         }}
-        title={t('subscriptions.deleteTitle')}
+        title={
+          deleting?.source_type === 'traffic'
+            ? t('subscriptions.deleteTitleTraffic')
+            : t('subscriptions.deleteTitle')
+        }
         description={
-          deleting ? t('subscriptions.deleteConfirm', { name: deleting.name }) : ''
+          deleting
+            ? deleting.source_type === 'traffic'
+              ? t('subscriptions.deleteConfirmTraffic', { name: deleting.name })
+              : t('subscriptions.deleteConfirm', { name: deleting.name })
+            : ''
         }
         onConfirm={confirmDelete}
         variant="destructive"

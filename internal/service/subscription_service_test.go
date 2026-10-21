@@ -22,6 +22,7 @@ type subscriptionTestEnv struct {
 	traffic  *store.TrafficStore
 	scores   *store.NodeScoreStore
 	groups   *store.ProxyGroupStore
+	proxies  *store.ProxyStore
 	settings *store.SettingsStore
 	svc      *SubscriptionService
 	now      time.Time
@@ -45,11 +46,12 @@ func newSubscriptionTestEnv(t *testing.T) *subscriptionTestEnv {
 		traffic:  store.NewTrafficStore(db),
 		scores:   store.NewNodeScoreStore(db),
 		groups:   store.NewProxyGroupStore(db),
+		proxies:  store.NewProxyStore(db),
 		settings: store.NewSettingsStore(db),
 		now:      time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC),
 	}
 	env.svc = NewSubscriptionService(
-		env.subs, env.configs, env.traffic, env.scores, env.groups, nil, env.settings, nil,
+		env.subs, env.configs, env.traffic, env.scores, env.groups, env.proxies, nil, env.settings, nil,
 	)
 	env.svc.nowFn = func() time.Time { return env.now }
 	if err := env.configs.Update(json.RawMessage(`{"rules":["MATCH,DIRECT"]}`)); err != nil {

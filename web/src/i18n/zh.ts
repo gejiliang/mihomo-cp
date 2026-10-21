@@ -447,6 +447,32 @@ export const zh: Record<TranslationKey, string> = {
   'subscriptions.providerMissing': '配置草稿中找不到所关联的 provider',
   'subscriptions.providerSourceCreated': '新建',
   'subscriptions.providerSourceLinked': '关联',
+  'subscriptions.sourceType': '来源类型',
+  'subscriptions.sourceTypeNative': '原生 provider',
+  'subscriptions.sourceTypeNativeHint':
+    '在配置草稿中创建或关联原生 mihomo proxy-provider（经发布中心生效）。',
+  'subscriptions.sourceTypeTraffic': '既有静态来源',
+  'subscriptions.sourceTypeTrafficHint':
+    '跟踪既有流量来源及其静态节点；不创建原生 provider，也绝不改动配置草稿。',
+  'subscriptions.sourceTypeTrafficBadge': '静态来源',
+  'subscriptions.trafficSource': '流量来源',
+  'subscriptions.trafficSourceSelect': '选择既有流量来源…',
+  'subscriptions.trafficProviderRequired': '请选择该来源要跟踪的流量 provider。',
+  'subscriptions.urlManagedByTrafficSource':
+    '订阅链接由流量来源持有，本页不重复存储；请在流量页修改链接。',
+  'subscriptions.statusLocal': '仅本地数据',
+  'subscriptions.localOnlyHint':
+    '该流量来源没有订阅链接：仅显示本地采样用量，厂商用量与到期时间未知。',
+  'subscriptions.supplierResetDayNotice':
+    '厂商仅报告重置日 {day}（不含小时与时区）。',
+  'subscriptions.scheduleConfiguredHint':
+    '上方重置时间与时区为本地配置，并非厂商提供。',
+  'subscriptions.nodeCountMatched': '匹配的静态节点',
+  'subscriptions.deleteTitleTraffic': '删除静态来源跟踪',
+  'subscriptions.deleteConfirmTraffic':
+    '删除“{name}”的跟踪记录？流量来源、历史统计与所有静态节点/分组均不受影响。',
+  'subscriptions.pausedUsageHintTraffic':
+    '自动元数据刷新已暂停；流量来源与静态配置不受影响。',
   'subscriptions.localUsed': '本周期本地统计',
   'subscriptions.resetInDays': '{days} 天后',
   'subscriptions.cycleEnds': '当前周期结束于 {time}',
@@ -466,7 +492,7 @@ export const zh: Record<TranslationKey, string> = {
   'subscriptions.used': '已用',
   'subscriptions.remaining': '剩余',
   'subscriptions.usageSource': '用量来源',
-  'subscriptions.sourceVendor': '供应商（subscription-userinfo）',
+  'subscriptions.sourceVendor': '厂商报告',
   'subscriptions.sourceLocal': '本地统计',
   'subscriptions.sourceManual': '手动',
   'subscriptions.sourceNone': '暂无数据',

@@ -30,6 +30,7 @@ const STATUS_KEY: Record<Subscription['status'], TranslationKey> = {
   stale: 'subscriptions.statusStale',
   error: 'subscriptions.statusError',
   disabled: 'subscriptions.statusDisabled',
+  local: 'subscriptions.statusLocal',
 };
 
 const SOURCE_KEY: Record<string, TranslationKey> = {
@@ -81,6 +82,7 @@ export function SubscriptionCard({
   const t = useT();
   const locale = useI18nStore((s) => s.locale) === 'zh' ? 'zh-CN' : 'en-GB';
   const s = subscription;
+  const isTraffic = s.source_type === 'traffic';
 
   const percent = formatPercent(s.used_bytes, s.quota_bytes);
   const neverFetched = !s.userinfo_fetched_at && !s.last_success_at;
@@ -121,21 +123,30 @@ export function SubscriptionCard({
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               <span className="inline-flex items-center gap-1">
                 <LinkIcon className="h-3 w-3" />
-                {s.provider_name || t('subscriptions.providerNone')}
+                {isTraffic
+                  ? `${t('subscriptions.trafficSource')}: ${s.traffic_provider_name || t('common.unknown')}`
+                  : s.provider_name || t('subscriptions.providerNone')}
               </span>
-              {s.provider_source === 'created' && (
+              {isTraffic && (
+                <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                  {t('subscriptions.sourceTypeTrafficBadge')}
+                </Badge>
+              )}
+              {!isTraffic && s.provider_source === 'created' && (
                 <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
                   {t('subscriptions.providerSourceCreated')}
                 </Badge>
               )}
-              {s.provider_source === 'linked' && (
+              {!isTraffic && s.provider_source === 'linked' && (
                 <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
                   {t('subscriptions.providerSourceLinked')}
                 </Badge>
               )}
               <span>
-                {t('subscriptions.nodeCount')}:{' '}
-                {s.node_count === null ? t('common.unknown') : s.node_count}
+                {isTraffic
+                  ? t('subscriptions.nodeCountMatched')
+                  : t('subscriptions.nodeCount')}
+                :{s.node_count === null ? t('common.unknown') : s.node_count}
               </span>
             </div>
           </div>
@@ -169,7 +180,7 @@ export function SubscriptionCard({
             {maskedUrl}
           </p>
         )}
-        {!s.provider_exists && s.provider_name && (
+        {!isTraffic && !s.provider_exists && s.provider_name && (
           <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangleIcon className="h-3 w-3" />
             {t('subscriptions.providerMissing')}
@@ -232,6 +243,16 @@ export function SubscriptionCard({
               </span>
             )}
             <span className="block text-xs text-muted-foreground">{schedule}</span>
+            {isTraffic && s.supplier_reset_day !== null && (
+              <span className="block text-xs text-muted-foreground">
+                {t('subscriptions.supplierResetDayNotice', { day: s.supplier_reset_day })}
+              </span>
+            )}
+            {isTraffic && s.reset_day >= 1 && (
+              <span className="block text-xs text-muted-foreground">
+                {t('subscriptions.scheduleConfiguredHint')}
+              </span>
+            )}
           </span>
 
           <span className="text-muted-foreground">{t('subscriptions.usageSource')}</span>
@@ -255,7 +276,13 @@ export function SubscriptionCard({
 
         {!s.enabled && (
           <p className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
-            {t('subscriptions.pausedUsageHint')}
+            {isTraffic ? t('subscriptions.pausedUsageHintTraffic') : t('subscriptions.pausedUsageHint')}
+          </p>
+        )}
+
+        {s.status === 'local' && s.enabled && (
+          <p className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-xs text-muted-foreground">
+            {t('subscriptions.localOnlyHint')}
           </p>
         )}
 

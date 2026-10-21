@@ -92,7 +92,7 @@ func New(cfg Config, db *store.DB) *Server {
 	subscriptionStore := store.NewSubscriptionStore(db)
 	nodeScoreStore := store.NewNodeScoreStore(db)
 	scoringSvc := service.NewScoringService(nodeScoreStore, proxyStore, proxyGroupStore, subscriptionStore, configStore, settingsStore, nil)
-	subscriptionSvc := service.NewSubscriptionService(subscriptionStore, configStore, trafficStore, nodeScoreStore, proxyGroupStore, mihomoClient, settingsStore, scoringSvc)
+	subscriptionSvc := service.NewSubscriptionService(subscriptionStore, configStore, trafficStore, nodeScoreStore, proxyGroupStore, proxyStore, mihomoClient, settingsStore, scoringSvc)
 
 	// Handlers
 	authHandler := handler.NewAuthHandler(userStore, authSvc)

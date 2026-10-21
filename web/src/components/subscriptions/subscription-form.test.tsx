@@ -16,6 +16,9 @@ const SUBSCRIPTION: Subscription = {
   provider_exists: true,
   url_masked: 'https://sub.example.com/••••',
   node_count: 42,
+  source_type: 'native',
+  traffic_provider_name: '',
+  supplier_reset_day: null,
   quota_bytes: 200 * 1024 ** 3,
   used_bytes: 50 * 1024 ** 3,
   remaining_bytes: 150 * 1024 ** 3,
@@ -348,5 +351,134 @@ describe('SubscriptionForm', () => {
     renderForm();
     expect(screen.getByLabelText('Manual expiry (date, time & timezone)')).toHaveValue('');
     expect(screen.getByText(/Vendor expiry/)).toBeInTheDocument();
+  });
+});
+
+const TRAFFIC_PROVIDERS = [
+  {
+    id: 'tp-legacy',
+    name: 'Legacy Traffic',
+    quota_bytes: 1000 * 1024 ** 3,
+    reset_day: 20,
+    reset_hour: 0,
+    reset_minute: 0,
+    reset_timezone: '',
+    node_patterns: ['Legacy-*'],
+    subscription_url: 'https://vendor.example/secret-path',
+    enabled: true,
+    created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-01T00:00:00Z',
+  },
+];
+
+describe('SubscriptionForm · traffic source', () => {
+  beforeEach(() => {
+    useI18nStore.setState({ locale: 'en' });
+  });
+
+  it('creates a traffic source: provider link sent, URL and provider name never sent, untouched quota/reset omitted for inheritance', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({ subscription: null, trafficProviders: TRAFFIC_PROVIDERS });
+
+    await user.type(screen.getByLabelText('Name'), 'Legacy Source');
+    await user.click(screen.getByRole('radio', { name: /Existing static source/ }));
+    await user.selectOptions(screen.getByLabelText('Traffic source'), 'tp-legacy');
+    // Prefilled inheritance preview is visible but not dirty.
+    expect(screen.getByLabelText('Manual monthly quota (GiB)')).toHaveValue(1000);
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input, id] = onSave.mock.calls[0];
+    expect(id).toBeUndefined();
+    expect(input).toMatchObject({ name: 'Legacy Source', source_type: 'traffic', traffic_provider_id: 'tp-legacy' });
+    expect(input.url).toBeUndefined();
+    expect(input.provider_name).toBeUndefined();
+    expect(input.quota_bytes).toBeUndefined();
+    expect(input.reset_day).toBeUndefined();
+    expect(input.timezone).toBeUndefined();
+  });
+
+  it('requires a traffic provider selection for a traffic source', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({ subscription: null, trafficProviders: [] });
+
+    await user.type(screen.getByLabelText('Name'), 'Legacy Source');
+    await user.click(screen.getByRole('radio', { name: /Existing static source/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(/Select the traffic provider/i)).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('sends explicitly edited quota and reset schedule as overrides', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({ subscription: null, trafficProviders: TRAFFIC_PROVIDERS });
+
+    await user.type(screen.getByLabelText('Name'), 'Legacy Source');
+    await user.click(screen.getByRole('radio', { name: /Existing static source/ }));
+    await user.selectOptions(screen.getByLabelText('Traffic source'), 'tp-legacy');
+    await user.clear(screen.getByLabelText('Manual monthly quota (GiB)'));
+    await user.type(screen.getByLabelText('Manual monthly quota (GiB)'), '2000');
+    // Day 20 is already configured by the TP prefill; editing it makes it dirty.
+    await user.clear(screen.getByLabelText('Reset day'));
+    await user.type(screen.getByLabelText('Reset day'), '1');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.quota_bytes).toBe(2000 * 1024 ** 3);
+    expect(input.reset_day).toBe(1);
+    expect(input.timezone).toBe('');
+  });
+
+  it('edits a traffic source without a URL or provider-name field and keeps the type immutable', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        source_type: 'traffic',
+        provider_name: '',
+        provider_source: '',
+        provider_exists: false,
+        traffic_provider_name: 'Legacy Traffic',
+        traffic_provider_id: 'tp-legacy',
+      },
+      providers: [],
+      trafficProviders: TRAFFIC_PROVIDERS,
+    });
+
+    expect(screen.queryByLabelText('Subscription URL')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Provider name')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Traffic source')).toHaveValue('tp-legacy');
+    // Rebinding to another provider is allowed; source type is not offered for change.
+    expect(screen.queryByLabelText('Source type')).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Traffic source'), 'tp-legacy');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input, id] = onSave.mock.calls[0];
+    expect(id).toBe('sub-1');
+    expect(input.source_type).toBeUndefined(); // edits never change the stored type
+    expect(input.traffic_provider_id).toBe('tp-legacy');
+    expect(input.url).toBeUndefined();
+    expect(input.provider_name).toBeUndefined();
+  });
+
+  it('does not offer the local-accounting select for traffic sources', () => {
+    renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        source_type: 'traffic',
+        provider_name: '',
+        provider_source: '',
+        provider_exists: false,
+        traffic_provider_name: 'Legacy Traffic',
+        traffic_provider_id: 'tp-legacy',
+      },
+      providers: [],
+      trafficProviders: TRAFFIC_PROVIDERS,
+    });
+    expect(screen.queryByLabelText('Local accounting provider (optional)')).not.toBeInTheDocument();
   });
 });
