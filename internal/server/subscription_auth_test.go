@@ -302,32 +302,142 @@ func TestDuplicateProviderCreateAndUpdateConflict(t *testing.T) {
 		t.Errorf("duplicate provider link create = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Race two creates for a brand-new provider: exactly one may succeed.
-	statuses := make(chan string, 2)
+	// Race two creates for a brand-new provider. The requests use DIFFERENT
+	// dummy URLs: exactly one may win, and the losing request must not
+	// overwrite the winner's native provider URL.
+	type raceResult struct {
+		name string
+		url  string
+		code int
+		body string
+	}
+	results := make(chan raceResult, 2)
 	var wg sync.WaitGroup
-	for _, name := range []string{"Race One", "Race Two"} {
+	for i, name := range []string{"Race One", "Race Two"} {
+		url := fmt.Sprintf("https://sub.example.com/race-%d", i+1)
 		wg.Add(1)
-		go func(name string) {
+		go func(name, url string) {
 			defer wg.Done()
-			body := `{"name":"` + name + `","url":"https://sub.example.com/race","provider_name":"race-provider","reset_day":10,"reset_hour":12,"timezone":"Asia/Shanghai"}`
+			body := `{"name":"` + name + `","url":"` + url + `","provider_name":"race-provider","reset_day":10,"reset_hour":12,"timezone":"Asia/Shanghai"}`
 			res := env.doAs(t, admin, "POST", "/api/subscriptions", body)
-			statuses <- fmt.Sprintf("%d %s", res.Code, res.Body.String())
-		}(name)
+			results <- raceResult{name: name, url: url, code: res.Code, body: res.Body.String()}
+		}(name, url)
 	}
 	wg.Wait()
-	close(statuses)
+	close(results)
+
 	createdCount, conflictCount := 0, 0
-	for result := range statuses {
-		switch {
-		case strings.HasPrefix(result, "201 "):
+	winnerURL, loserURL := "", ""
+	for result := range results {
+		switch result.code {
+		case http.StatusCreated:
 			createdCount++
-		case strings.HasPrefix(result, "409 "):
+			winnerURL = result.url
+		case http.StatusConflict:
 			conflictCount++
+			loserURL = result.url
 		default:
-			t.Errorf("concurrent duplicate create result = %s, want 201 or 409", result)
+			t.Errorf("concurrent duplicate create %s = %d %s, want 201 or 409", result.name, result.code, result.body)
 		}
 	}
 	if createdCount != 1 || conflictCount != 1 {
 		t.Errorf("concurrent duplicate provider creates = %d created, %d conflicts; want 1/1", createdCount, conflictCount)
 	}
+	if winnerURL != "" {
+		draftURL, ok := draftProviderURL(t, env, "race-provider")
+		if !ok {
+			t.Error("winning create has no native provider entry in the draft")
+		} else if draftURL != winnerURL {
+			t.Errorf("draft provider URL = %q, want winner %q", draftURL, winnerURL)
+		}
+		if loserURL != "" && draftURL == loserURL {
+			t.Errorf("losing create overwrote native provider URL with %q", loserURL)
+		}
+		subs := store.NewSubscriptionStore(env.srv.db)
+		sub, err := subs.GetByProvider("race-provider")
+		if err != nil {
+			t.Errorf("winning subscription metadata missing: %v", err)
+		} else if sub.Name != "Race One" && sub.Name != "Race Two" {
+			t.Errorf("unexpected metadata owner %q", sub.Name)
+		}
+	}
+
+	// Two distinct-provider creates racing each other must both persist their
+	// native provider entry AND their subscription metadata.
+	distinct := make(chan raceResult, 2)
+	for i, name := range []string{"Distinct One", "Distinct Two"} {
+		providerName := fmt.Sprintf("distinct-provider-%d", i+1)
+		url := fmt.Sprintf("https://sub.example.com/distinct-%d", i+1)
+		wg.Add(1)
+		go func(name, providerName, url string) {
+			defer wg.Done()
+			body := `{"name":"` + name + `","url":"` + url + `","provider_name":"` + providerName + `","reset_day":10,"reset_hour":12,"timezone":"Asia/Shanghai"}`
+			res := env.doAs(t, admin, "POST", "/api/subscriptions", body)
+			distinct <- raceResult{name: name, url: url, code: res.Code, body: res.Body.String()}
+		}(name, providerName, url)
+	}
+	wg.Wait()
+	close(distinct)
+	subs := store.NewSubscriptionStore(env.srv.db)
+	for result := range distinct {
+		if result.code != http.StatusCreated {
+			t.Errorf("distinct create %s = %d %s, want 201", result.name, result.code, result.body)
+			continue
+		}
+		providerName := ""
+		switch result.name {
+		case "Distinct One":
+			providerName = "distinct-provider-1"
+		case "Distinct Two":
+			providerName = "distinct-provider-2"
+		}
+		if got, ok := draftProviderURL(t, env, providerName); !ok || got != result.url {
+			t.Errorf("distinct provider %s draft URL = %q/%v, want %q", providerName, got, ok, result.url)
+		}
+		if sub, err := subs.GetByProvider(providerName); err != nil {
+			t.Errorf("distinct provider %s metadata missing: %v", providerName, err)
+		} else if sub.Name != result.name {
+			t.Errorf("distinct provider %s metadata owner = %q, want %q", providerName, sub.Name, result.name)
+		}
+	}
+
+	// A failed create with an invalid traffic_provider_id must leave no
+	// orphan native provider entry or subscription metadata.
+	rec = env.doAs(t, admin, "POST", "/api/subscriptions", `{
+		"name":"Orphan Test","url":"https://sub.example.com/orphan",
+		"provider_name":"orphan-provider","traffic_provider_id":"missing-traffic-provider"
+	}`)
+	if rec.Code < 400 {
+		t.Errorf("invalid traffic_provider_id create = %d, want failure; body=%s", rec.Code, rec.Body.String())
+	}
+	if url, ok := draftProviderURL(t, env, "orphan-provider"); ok {
+		t.Errorf("failed create left an orphan provider entry with URL %q", url)
+	}
+	if sub, err := subs.GetByName("Orphan Test"); err == nil {
+		t.Errorf("failed create left orphan subscription metadata: %+v", sub)
+	}
+}
+
+func draftProviderURL(t *testing.T, env *subscriptionAuthEnv, name string) (string, bool) {
+	t.Helper()
+	raw, err := store.NewConfigStore(env.srv.db).Get()
+	if err != nil {
+		t.Fatalf("read draft config: %v", err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("decode draft config: %v", err)
+	}
+	var providers map[string]map[string]any
+	if rawProviders, ok := root["proxy-providers"]; ok {
+		if err := json.Unmarshal(rawProviders, &providers); err != nil {
+			t.Fatalf("decode proxy-providers: %v", err)
+		}
+	}
+	entry, ok := providers[name]
+	if !ok {
+		return "", false
+	}
+	url, _ := entry["url"].(string)
+	return url, true
 }
