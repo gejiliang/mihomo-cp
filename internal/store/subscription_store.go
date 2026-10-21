@@ -1,0 +1,131 @@
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/gejiliang/mihomo-cp/internal/model"
+)
+
+// SubscriptionStore manages normalized subscription metadata and status
+// snapshots. The config source of truth (proxy-provider URL/settings) lives
+// in the system config draft; this store only carries metadata and status.
+type SubscriptionStore struct {
+	db *DB
+}
+
+// NewSubscriptionStore creates a new SubscriptionStore.
+func NewSubscriptionStore(db *DB) *SubscriptionStore {
+	return &SubscriptionStore{db: db}
+}
+
+// List returns all subscriptions ordered by name.
+func (s *SubscriptionStore) List() ([]model.Subscription, error) {
+	var subs []model.Subscription
+	if err := s.db.Select(&subs, `SELECT * FROM subscriptions ORDER BY name`); err != nil {
+		return nil, fmt.Errorf("list subscriptions: %w", err)
+	}
+	return subs, nil
+}
+
+// Get returns one subscription by id, or ErrNotFound.
+func (s *SubscriptionStore) Get(id string) (*model.Subscription, error) {
+	var sub model.Subscription
+	err := s.db.Get(&sub, `SELECT * FROM subscriptions WHERE id = ?`, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subscription: %w", err)
+	}
+	return &sub, nil
+}
+
+// GetByName returns one subscription by display name, or ErrNotFound.
+func (s *SubscriptionStore) GetByName(name string) (*model.Subscription, error) {
+	var sub model.Subscription
+	err := s.db.Get(&sub, `SELECT * FROM subscriptions WHERE name = ?`, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subscription by name: %w", err)
+	}
+	return &sub, nil
+}
+
+// GetByProvider returns the subscription linked to a native provider name, or ErrNotFound.
+func (s *SubscriptionStore) GetByProvider(providerName string) (*model.Subscription, error) {
+	var sub model.Subscription
+	err := s.db.Get(&sub, `SELECT * FROM subscriptions WHERE provider_name = ?`, providerName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subscription by provider: %w", err)
+	}
+	return &sub, nil
+}
+
+// Create inserts a new subscription row.
+func (s *SubscriptionStore) Create(sub *model.Subscription) error {
+	now := time.Now().UTC()
+	sub.CreatedAt, sub.UpdatedAt = now, now
+	_, err := s.db.Exec(
+		`INSERT INTO subscriptions (
+			id, name, enabled, provider_name, quota_bytes, manual_expire,
+			reset_day, reset_hour, reset_minute, reset_timezone, traffic_provider_id, provider_source,
+			userinfo_upload, userinfo_download, userinfo_total, userinfo_expire, userinfo_counters, userinfo_fetched_at,
+			last_refresh_at, last_success_at, last_refresh_error, last_provider_update,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sub.ID, sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource,
+		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
+		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
+		sub.CreatedAt, sub.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("create subscription: %w", err)
+	}
+	return nil
+}
+
+// Update persists mutable fields of an existing subscription row.
+func (s *SubscriptionStore) Update(sub *model.Subscription) error {
+	sub.UpdatedAt = time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE subscriptions SET
+			name = ?, enabled = ?, provider_name = ?, quota_bytes = ?, manual_expire = ?,
+			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?,
+			userinfo_upload = ?, userinfo_download = ?, userinfo_total = ?, userinfo_expire = ?, userinfo_counters = ?, userinfo_fetched_at = ?,
+			last_refresh_at = ?, last_success_at = ?, last_refresh_error = ?, last_provider_update = ?, updated_at = ?
+		WHERE id = ?`,
+		sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource,
+		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
+		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
+		sub.UpdatedAt, sub.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update subscription: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Delete removes a subscription row.
+func (s *SubscriptionStore) Delete(id string) error {
+	res, err := s.db.Exec(`DELETE FROM subscriptions WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete subscription: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

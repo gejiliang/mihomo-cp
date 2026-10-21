@@ -279,6 +279,7 @@ func (s *TrafficService) fetchUserinfo(url string) (*model.TrafficUserinfo, erro
 func ParseUserinfo(header string) (*model.TrafficUserinfo, error) {
 	info := &model.TrafficUserinfo{}
 	found := false
+	var sawUpload, sawDownload bool
 	for _, part := range strings.Split(header, ";") {
 		kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
 		if len(kv) != 2 {
@@ -290,47 +291,46 @@ func ParseUserinfo(header string) (*model.TrafficUserinfo, error) {
 		}
 		switch strings.ToLower(strings.TrimSpace(kv[0])) {
 		case "upload":
-			info.Upload, found = v, true
+			info.Upload, sawUpload, found = v, true, true
 		case "download":
-			info.Download, found = v, true
+			info.Download, sawDownload, found = v, true, true
 		case "total":
 			info.Total, found = v, true
 		case "expire":
-			info.Expire = v
+			info.Expire, found = v, true
 		}
 	}
 	if !found {
 		return nil, fmt.Errorf("unparsable subscription-userinfo: %q", header)
 	}
+	// Usage counters are known only when BOTH are present; total/expire-only
+	// headers must not be misread as "0 used".
+	info.HasCounters = sawUpload && sawDownload
 	return info, nil
 }
 
 // ── Cycle math & attribution ─────────────────────────────────────────────────
 
 // CycleStart returns the start of the current billing cycle for a monthly
-// quota that resets on resetDay (1-31), in now's location. Reset days beyond
-// the end of a month are clamped to that month's last day.
+// quota that resets on resetDay (1-31) at midnight in now's location. Reset
+// days beyond the end of a month are clamped to that month's last day.
+// It is the legacy entry point preserved for old callers; new code should
+// use CycleStartAt with an explicit ResetPolicy.
 func CycleStart(now time.Time, resetDay int) time.Time {
 	if resetDay < 1 {
 		resetDay = 1
 	}
-	year, month := now.Year(), now.Month()
-	day := clampDay(year, month, resetDay)
-	if now.Day() < day {
-		// Cycle started in the previous month.
-		prev := now.AddDate(0, -1, -now.Day()+1) // some day in the previous month
-		year, month = prev.Year(), prev.Month()
-		day = clampDay(year, month, resetDay)
+	p := ResetPolicy{Day: resetDay}
+	if now.Location() != time.Local {
+		p.Timezone = now.Location().String()
 	}
-	return time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+	return cycleStartInTZ(now, p)
 }
 
-func clampDay(year int, month time.Month, day int) int {
-	last := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
-	if day > last {
-		return last
-	}
-	return day
+// ProviderResetPolicy builds the ResetPolicy for a traffic provider row,
+// falling back to legacy midnight/local when the extended fields are unset.
+func ProviderResetPolicy(p model.TrafficProvider) ResetPolicy {
+	return ResetPolicy{Day: p.ResetDay, Hour: p.ResetHour, Minute: p.ResetMinute, Timezone: p.ResetTimezone}
 }
 
 // MatchProvider returns the id of the first enabled provider whose pattern

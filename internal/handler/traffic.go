@@ -65,6 +65,9 @@ type providerRequest struct {
 	Name            string   `json:"name"`
 	QuotaBytes      int64    `json:"quota_bytes"`
 	ResetDay        int      `json:"reset_day"`
+	ResetHour       int      `json:"reset_hour"`
+	ResetMinute     int      `json:"reset_minute"`
+	ResetTimezone   string   `json:"reset_timezone"` // IANA name, "" = server local
 	NodePatterns    []string `json:"node_patterns"`
 	SubscriptionURL string   `json:"subscription_url"`
 	Enabled         *bool    `json:"enabled"`
@@ -79,6 +82,10 @@ func (req *providerRequest) validate() string {
 	}
 	if req.ResetDay < 1 || req.ResetDay > 31 {
 		return "reset_day must be between 1 and 31"
+	}
+	policy := service.ResetPolicy{Day: req.ResetDay, Hour: req.ResetHour, Minute: req.ResetMinute, Timezone: req.ResetTimezone}
+	if _, err := policy.Normalize(); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -103,6 +110,9 @@ func (h *TrafficHandler) CreateProvider(w http.ResponseWriter, r *http.Request) 
 		Name:            strings.TrimSpace(req.Name),
 		QuotaBytes:      req.QuotaBytes,
 		ResetDay:        req.ResetDay,
+		ResetHour:       req.ResetHour,
+		ResetMinute:     req.ResetMinute,
+		ResetTimezone:   strings.TrimSpace(req.ResetTimezone),
 		NodePatternList: req.NodePatterns,
 		SubscriptionURL: strings.TrimSpace(req.SubscriptionURL),
 		Enabled:         enabled,
@@ -137,6 +147,9 @@ func (h *TrafficHandler) UpdateProvider(w http.ResponseWriter, r *http.Request) 
 	p.Name = strings.TrimSpace(req.Name)
 	p.QuotaBytes = req.QuotaBytes
 	p.ResetDay = req.ResetDay
+	p.ResetHour = req.ResetHour
+	p.ResetMinute = req.ResetMinute
+	p.ResetTimezone = strings.TrimSpace(req.ResetTimezone)
 	p.NodePatternList = req.NodePatterns
 	p.SubscriptionURL = strings.TrimSpace(req.SubscriptionURL)
 	if req.Enabled != nil {

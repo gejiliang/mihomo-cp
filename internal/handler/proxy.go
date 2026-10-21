@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
@@ -15,13 +14,13 @@ import (
 type ProxyHandler struct {
 	proxies     *store.ProxyStore
 	proxyGroups *store.ProxyGroupStore
-	geoIPSvc    *service.GeoIPService
+	scoring     *service.ScoringService
 	settings    *store.SettingsStore
 }
 
 // NewProxyHandler creates a new ProxyHandler.
-func NewProxyHandler(ps *store.ProxyStore, pgs *store.ProxyGroupStore, geoIP *service.GeoIPService, ss *store.SettingsStore) *ProxyHandler {
-	return &ProxyHandler{proxies: ps, proxyGroups: pgs, geoIPSvc: geoIP, settings: ss}
+func NewProxyHandler(ps *store.ProxyStore, pgs *store.ProxyGroupStore, scoring *service.ScoringService, ss *store.SettingsStore) *ProxyHandler {
+	return &ProxyHandler{proxies: ps, proxyGroups: pgs, scoring: scoring, settings: ss}
 }
 
 // List handles GET /api/proxies
@@ -47,28 +46,15 @@ func (h *ProxyHandler) Get(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, p)
 }
 
-// detectCountryAsync triggers async country detection for a single proxy after create/update.
-func (h *ProxyHandler) detectCountryAsync(proxyID, proxyName string) {
-	go func() {
-		settings, err := h.settings.Get()
-		if err != nil || settings.ExtController == "" {
-			return
-		}
-		country, err := h.geoIPSvc.DetectOne(settings.ExtController, settings.ExtSecret, proxyName)
-		if err != nil || country == "" {
-			return
-		}
-		p, err := h.proxies.GetByID(proxyID)
-		if err != nil {
-			return
-		}
-		if p.Country != country {
-			p.Country = country
-			if err := h.proxies.Update(p); err != nil {
-				log.Printf("auto-detect country: failed to update proxy %s: %v", proxyName, err)
-			}
-		}
-	}()
+// enqueueScoreAsync queues a real-egress score for the proxy after
+// create/update. The isolated egress test replaces the old global-mode
+// country detection; results (exit IP, trust score, country) land on the
+// node-scores endpoints.
+func (h *ProxyHandler) enqueueScoreAsync(proxyName string) {
+	if h.scoring == nil {
+		return
+	}
+	go h.scoring.EnqueueStaticProxy(proxyName)
 }
 
 // Create handles POST /api/proxies
@@ -83,7 +69,7 @@ func (h *ProxyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Error(w, 500, "internal", err.Error())
 		return
 	}
-	h.detectCountryAsync(p.ID, p.Name)
+	h.enqueueScoreAsync(p.Name)
 	JSON(w, 201, p)
 }
 
@@ -100,7 +86,7 @@ func (h *ProxyHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Error(w, 500, "internal", err.Error())
 		return
 	}
-	h.detectCountryAsync(p.ID, p.Name)
+	h.enqueueScoreAsync(p.Name)
 	JSON(w, 200, p)
 }
 
@@ -138,6 +124,9 @@ func (h *ProxyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.proxies.Delete(id); err != nil {
 		Error(w, 500, "internal", err.Error())
 		return
+	}
+	if h.scoring != nil {
+		h.scoring.RemoveStaticProxy(proxy.Name)
 	}
 	JSON(w, 200, map[string]string{"status": "deleted"})
 }
@@ -203,66 +192,4 @@ func (h *ProxyHandler) findRefs(id string) ([]string, error) {
 		}
 	}
 	return refs, nil
-}
-
-// DetectCountries handles POST /api/proxies/detect-countries
-// Accepts a JSON body with a name→country mapping, e.g.:
-// {"countries": {"PS-SS-c21s1": "US", "HK-01-DX": "HK", ...}}
-// If the body is empty, starts a temporary mihomo instance to detect exit countries.
-func (h *ProxyHandler) DetectCountries(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Countries map[string]string `json:"countries"`
-	}
-	_ = DecodeJSON(r, &req)
-
-	proxies, err := h.proxies.List("", "")
-	if err != nil {
-		Error(w, 500, "internal", err.Error())
-		return
-	}
-
-	countryMap := req.Countries
-
-	// If no explicit mapping, detect by routing through each proxy via mihomo
-	if len(countryMap) == 0 {
-		settings, err := h.settings.Get()
-		if err != nil {
-			Error(w, 500, "internal", "failed to read settings: "+err.Error())
-			return
-		}
-		extController := settings.ExtController
-		if extController == "" {
-			Error(w, 400, "bad_request", "mihomo external controller not configured in settings")
-			return
-		}
-		detected, err := h.geoIPSvc.DetectAll(extController, settings.ExtSecret, proxies)
-		if err != nil {
-			Error(w, 500, "internal", "country detection failed: "+err.Error())
-			return
-		}
-		countryMap = detected
-	}
-
-	// Update proxies with detected countries
-	updated := 0
-	for _, p := range proxies {
-		country, found := countryMap[p.Name]
-		if !found || country == "" {
-			continue
-		}
-		if p.Country == country {
-			continue
-		}
-		p.Country = country
-		if err := h.proxies.Update(p); err != nil {
-			continue
-		}
-		updated++
-	}
-
-	JSON(w, 200, map[string]any{
-		"status":  "ok",
-		"total":   len(proxies),
-		"updated": updated,
-	})
 }

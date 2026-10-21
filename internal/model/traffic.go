@@ -10,7 +10,10 @@ type TrafficProvider struct {
 	Name            string    `json:"name" db:"name"`
 	QuotaBytes      int64     `json:"quota_bytes" db:"quota_bytes"`
 	ResetDay        int       `json:"reset_day" db:"reset_day"`
-	NodePatterns    string    `json:"-" db:"node_patterns"` // JSON array, exposed via NodePatternList
+	ResetHour       int       `json:"reset_hour" db:"reset_hour"`
+	ResetMinute     int       `json:"reset_minute" db:"reset_minute"`
+	ResetTimezone   string    `json:"reset_timezone" db:"reset_timezone"` // IANA name, "" = server local
+	NodePatterns    string    `json:"-" db:"node_patterns"`               // JSON array, exposed via NodePatternList
 	SubscriptionURL string    `json:"subscription_url" db:"subscription_url"`
 	Enabled         bool      `json:"enabled" db:"enabled"`
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
@@ -28,6 +31,9 @@ type TrafficUserinfo struct {
 	Total      int64     `json:"total" db:"total"`
 	Expire     int64     `json:"expire" db:"expire"`
 	FetchedAt  time.Time `json:"fetched_at" db:"fetched_at"`
+	// HasCounters reports whether BOTH upload and download were present in
+	// the header. Absent counters mean "unknown", never a silent 0.
+	HasCounters bool `json:"-" db:"-"`
 }
 
 // TrafficAlert is a fired quota alert. (provider_id, cycle_start, threshold)

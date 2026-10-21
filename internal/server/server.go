@@ -38,8 +38,13 @@ type Server struct {
 	importHandler       *handler.ImportHandler
 	settingsHandler     *handler.SettingsHandler
 	trafficHandler      *handler.TrafficHandler
+	subscriptionHandler *handler.SubscriptionHandler
+	scoresHandler       *handler.ScoresHandler
 	trafficSvc          *service.TrafficService
+	scoringSvc          *service.ScoringService
+	subscriptionSvc     *service.SubscriptionService
 	trafficCancel       context.CancelFunc
+	scoringCancel       context.CancelFunc
 }
 
 // New creates a new Server from the given Config and database.
@@ -78,10 +83,23 @@ func New(cfg Config, db *store.DB) *Server {
 
 	publishSvc := service.NewPublishService(publishStore, configSvc, validator, mihomoClient)
 
+	trafficStore := store.NewTrafficStore(db)
+	notifySvc := service.NewNotifyService()
+	trafficSvc := service.NewTrafficService(trafficStore, mihomoClient, notifySvc)
+
+	// Subscriptions & node exit-IP scoring (wired before handlers: the proxy
+	// handler enqueues scoring work on proxy create/update)
+	subscriptionStore := store.NewSubscriptionStore(db)
+	nodeScoreStore := store.NewNodeScoreStore(db)
+	scoringSvc := service.NewScoringService(nodeScoreStore, proxyStore, proxyGroupStore, subscriptionStore, configStore, settingsStore, nil)
+	if st, err := settingsStore.Get(); err == nil && st.MihomoBinary != "" {
+		scoringSvc.EnsureProber(st.MihomoBinary)
+	}
+	subscriptionSvc := service.NewSubscriptionService(subscriptionStore, configStore, trafficStore, nodeScoreStore, proxyGroupStore, mihomoClient, settingsStore, scoringSvc)
+
 	// Handlers
 	authHandler := handler.NewAuthHandler(userStore, authSvc)
-	geoIPSvc := service.NewGeoIPService()
-	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore, geoIPSvc, settingsStore)
+	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore, scoringSvc, settingsStore)
 	proxyGroupHandler := handler.NewProxyGroupHandler(proxyGroupStore, ruleStore)
 	ruleHandler := handler.NewRuleHandler(ruleStore)
 	ruleProviderHandler := handler.NewRuleProviderHandler(ruleProviderStore, settingsStore, mihomoClient)
@@ -92,10 +110,9 @@ func New(cfg Config, db *store.DB) *Server {
 		configSvc, validator, publishSvc, importSvc,
 	)
 	runtimeHandler := handler.NewRuntimeHandler(mihomoClient)
-	trafficStore := store.NewTrafficStore(db)
-	notifySvc := service.NewNotifyService()
-	trafficSvc := service.NewTrafficService(trafficStore, mihomoClient, notifySvc)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc, trafficStore, notifySvc)
+	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionSvc)
+	scoresHandler := handler.NewScoresHandler(nodeScoreStore, scoringSvc)
 	importHandler := handler.NewImportHandler(
 		importSvc, proxyStore, proxyGroupStore, ruleStore, ruleProviderStore, configStore, settingsStore,
 	)
@@ -116,7 +133,11 @@ func New(cfg Config, db *store.DB) *Server {
 		importHandler:       importHandler,
 		settingsHandler:     settingsHandler,
 		trafficHandler:      trafficHandler,
+		subscriptionHandler: subscriptionHandler,
+		scoresHandler:       scoresHandler,
 		trafficSvc:          trafficSvc,
+		scoringSvc:          scoringSvc,
+		subscriptionSvc:     subscriptionSvc,
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 			Handler: middleware.Logging(mux),
@@ -156,7 +177,6 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/proxies", protected(s.proxyHandler.List))
 	s.mux.Handle("POST /api/proxies", protected(s.proxyHandler.Create))
 	s.mux.Handle("POST /api/proxies/reorder", protected(s.proxyHandler.Reorder))
-	s.mux.Handle("POST /api/proxies/detect-countries", protected(s.proxyHandler.DetectCountries))
 	s.mux.Handle("GET /api/proxies/{id}", protected(s.proxyHandler.Get))
 	s.mux.Handle("PUT /api/proxies/{id}", protected(s.proxyHandler.Update))
 	s.mux.Handle("DELETE /api/proxies/{id}", protected(s.proxyHandler.Delete))
@@ -228,6 +248,20 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("PUT /api/traffic/settings", protected(s.trafficHandler.UpdateSettings))
 	s.mux.Handle("POST /api/traffic/test-notify", protected(s.trafficHandler.TestNotify))
 
+	// ── Subscriptions & node scores ───────────────────────────────────────────
+	s.mux.Handle("GET /api/subscriptions", protected(s.subscriptionHandler.List))
+	s.mux.Handle("POST /api/subscriptions", adminOnly(s.subscriptionHandler.Create))
+	s.mux.Handle("GET /api/subscriptions/providers", protected(s.subscriptionHandler.Discover))
+	s.mux.Handle("GET /api/subscriptions/{id}", protected(s.subscriptionHandler.Get))
+	s.mux.Handle("PUT /api/subscriptions/{id}", adminOnly(s.subscriptionHandler.Update))
+	s.mux.Handle("DELETE /api/subscriptions/{id}", adminOnly(s.subscriptionHandler.Delete))
+	s.mux.Handle("POST /api/subscriptions/{id}/refresh", adminOnly(s.subscriptionHandler.Refresh))
+
+	s.mux.Handle("GET /api/node-scores", protected(s.scoresHandler.List))
+	s.mux.Handle("POST /api/node-scores/refresh", adminOnly(s.scoresHandler.RefreshBatch))
+	s.mux.Handle("GET /api/node-scores/{id}", protected(s.scoresHandler.Get))
+	s.mux.Handle("POST /api/node-scores/{id}/refresh", adminOnly(s.scoresHandler.RefreshOne))
+
 	// ── Import ────────────────────────────────────────────────────────────────
 	s.mux.Handle("POST /api/import/config", protected(s.importHandler.Import))
 
@@ -281,6 +315,11 @@ func (s *Server) Start() error {
 	s.trafficCancel = cancel
 	go s.trafficSvc.Run(ctx)
 
+	scoringCtx, scoringCancel := context.WithCancel(context.Background())
+	s.scoringCancel = scoringCancel
+	go s.scoringSvc.Run(scoringCtx)
+	go s.subscriptionSvc.Run(scoringCtx)
+
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -291,6 +330,9 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.trafficCancel != nil {
 		s.trafficCancel()
+	}
+	if s.scoringCancel != nil {
+		s.scoringCancel()
 	}
 	return s.httpServer.Shutdown(ctx)
 }
