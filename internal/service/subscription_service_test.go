@@ -726,3 +726,62 @@ func TestSubscriptionRefreshPreservesRetryAfter48Hours(t *testing.T) {
 		t.Errorf("RetryAfterSecond = %d, want 172800 (48h, not capped at 24h)", refErr.RetryAfterSecond)
 	}
 }
+
+func TestSubscriptionManualRefreshUsesProxyProviderEndpoint(t *testing.T) {
+	userinfoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("subscription-userinfo", "upload=1; download=2; total=214748364800")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(userinfoSrv.Close)
+
+	type recorded struct {
+		method string
+		path   string
+		auth   string
+	}
+	var calls []recorded
+	mihomoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, recorded{
+			method: r.Method,
+			path:   r.URL.EscapedPath(),
+			auth:   r.Header.Get("Authorization"),
+		})
+		if r.URL.EscapedPath() != "/providers/proxies/Example%20Provider" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(mihomoSrv.Close)
+
+	env := newSubscriptionTestEnv(t)
+	view := env.create(t, `{
+		"name":"Mock Sub","url":"`+userinfoSrv.URL+`",
+		"provider_name":"Example Provider",
+		"reset_day":10,"reset_hour":12,"reset_minute":0,"timezone":"Asia/Shanghai"
+	}`)
+	env.svc.mihomo = NewMihomoClient(mihomoSrv.URL, "mihomo-secret")
+
+	_, refErr := env.svc.Refresh(view.ID)
+	if refErr != nil {
+		t.Fatalf("manual refresh: %+v", refErr)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("runtime calls = %#v, want exactly one proxy-provider refresh", calls)
+	}
+	if calls[0].method != http.MethodPut {
+		t.Errorf("method = %q, want PUT", calls[0].method)
+	}
+	if calls[0].path != "/providers/proxies/Example%20Provider" {
+		t.Errorf("path = %q, want escaped proxy-provider path", calls[0].path)
+	}
+	if calls[0].auth != "Bearer mihomo-secret" {
+		t.Errorf("authorization = %q, want bearer secret", calls[0].auth)
+	}
+	for _, call := range calls {
+		if strings.Contains(call.path, "/providers/rules/") {
+			t.Errorf("subscription refresh called rule-provider endpoint: %s", call.path)
+		}
+	}
+}

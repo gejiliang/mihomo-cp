@@ -155,6 +155,15 @@ func (c *MihomoClient) RefreshProvider(name string) error {
 	return err
 }
 
+// RefreshProxyProvider sends PUT /providers/proxies/:name to refresh a native
+// PROXY provider (subscription). The rule-provider endpoint answers 404 for
+// proxy providers, so subscription refresh must use this distinct method.
+func (c *MihomoClient) RefreshProxyProvider(name string) error {
+	path := fmt.Sprintf("/providers/proxies/%s", url.PathEscape(name))
+	_, err := c.do(http.MethodPut, path, nil)
+	return err
+}
+
 // GetVersion returns raw JSON from GET /version.
 func (c *MihomoClient) GetVersion() (json.RawMessage, error) {
 	data, err := c.do(http.MethodGet, "/version", nil)
