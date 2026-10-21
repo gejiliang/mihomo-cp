@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SubscriptionForm } from './subscription-form';
@@ -95,8 +95,8 @@ describe('SubscriptionForm', () => {
     expect(id).toBe('sub-1');
     expect(input.url).toBeUndefined();
     expect(input.provider_name).toBe('provider-example');
-    expect(input.manual_expire).toBe('');
-    expect(input.quota_bytes).toBe(0);
+    expect(input.manual_expire).toBeUndefined();
+    expect(input.quota_bytes).toBeUndefined();
     expect(input.reset_day).toBe(10);
     expect(input.reset_hour).toBe(12);
     expect(input.timezone).toBe('Asia/Shanghai');
@@ -214,7 +214,7 @@ describe('SubscriptionForm', () => {
         expires_at: '2027-01-09T00:00:00Z',
       },
     });
-    expect(screen.getByLabelText('Manual expiry date')).toHaveValue('2027-01-09');
+    expect(screen.getByLabelText('Manual expiry (date, time & timezone)')).toHaveValue('2027-01-09T08:00');
   });
 
   it('keeps a manual-only quota when editing another field', () => {
@@ -228,9 +228,87 @@ describe('SubscriptionForm', () => {
     expect(screen.getByLabelText('Manual monthly quota (GiB)')).toHaveValue(500);
   });
 
+  it('preserves untouched vendor/manual supplements when renaming', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        quota_bytes: 300 * 1024 ** 3,
+        userinfo: {
+          upload: 10 * 1024 ** 3,
+          download: 40 * 1024 ** 3,
+          total: 200 * 1024 ** 3,
+          expire: 0,
+          fetched_at: '2026-10-21T03:00:00Z',
+        },
+        expires_source: 'manual',
+        expires_at: '2027-01-09T04:30:15Z',
+      },
+    });
+
+    expect(screen.getByLabelText('Manual expiry (date, time & timezone)')).toHaveValue(
+      '2027-01-09T12:30:15'
+    );
+    const name = screen.getByLabelText('Name');
+    await user.clear(name);
+    await user.type(name, 'Renamed');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.quota_bytes).toBeUndefined();
+    expect(input.manual_expire).toBeUndefined();
+  });
+
+  it('sends an explicitly edited expiry as datetime in the chosen timezone', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        expires_source: 'manual',
+        expires_at: '2027-01-09T04:30:15Z',
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText('Manual expiry (date, time & timezone)'), {
+      target: { value: '2027-02-03T04:05:00' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.manual_expire).toBe('2027-02-02T20:05:00.000Z');
+  });
+
+  it('explicitly clears quota and expiry supplements', async () => {
+    const user = userEvent.setup();
+    const { onSave } = renderForm({
+      subscription: {
+        ...SUBSCRIPTION,
+        userinfo: { upload: 0, download: 0, total: 0, expire: 0, fetched_at: '' },
+        quota_bytes: 500 * 1024 ** 3,
+        expires_source: 'manual',
+        expires_at: '2027-01-09T04:30:15Z',
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText('Manual monthly quota (GiB)'), {
+      target: { value: '' },
+    });
+    fireEvent.change(screen.getByLabelText('Manual expiry (date, time & timezone)'), {
+      target: { value: '' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [input] = onSave.mock.calls[0];
+    expect(input.quota_bytes).toBe(0);
+    expect(input.manual_expire).toBe('');
+  });
+
   it('does not prefill the vendor expiry into the manual field', () => {
     renderForm();
-    expect(screen.getByLabelText('Manual expiry date')).toHaveValue('');
+    expect(screen.getByLabelText('Manual expiry (date, time & timezone)')).toHaveValue('');
     expect(screen.getByText(/Vendor expiry/)).toBeInTheDocument();
   });
 });

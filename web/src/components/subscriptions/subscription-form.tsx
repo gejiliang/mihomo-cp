@@ -49,11 +49,75 @@ function validTimezone(tz: string): boolean {
   }
 }
 
-function toDateInput(iso: string | null): string {
+function zoneOffsetMinutes(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZone || undefined,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asUTC = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour') % 24,
+    get('minute'),
+    get('second')
+  );
+  return Math.round((asUTC - date.getTime()) / 60000);
+}
+
+/** Formats an instant as a wall-clock datetime-local value in the chosen zone. */
+function toDateTimeInput(iso: string | null, timeZone: string): string {
   if (!iso) return '';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().slice(0, 10);
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timeZone || undefined,
+      hour12: false,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+    return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
+  } catch {
+    return '';
+  }
+}
+
+/** Converts an explicit wall-clock datetime in an IANA zone to RFC3339 UTC. */
+function wallTimeToISO(value: string, timeZone: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6] ?? '0');
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  const wallUTC = Date.UTC(year, month - 1, day, hour, minute, second);
+  try {
+    if (timeZone) new Intl.DateTimeFormat('en-US', { timeZone });
+    let instant = wallUTC - zoneOffsetMinutes(new Date(wallUTC), timeZone) * 60000;
+    instant = wallUTC - zoneOffsetMinutes(new Date(instant), timeZone) * 60000;
+    return new Date(instant).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 interface SubscriptionFormProps {
@@ -84,7 +148,10 @@ export function SubscriptionForm({
   const [url, setUrl] = useState('');
   const [enabled, setEnabled] = useState(true);
   const [quotaGB, setQuotaGB] = useState('');
+  const [quotaDirty, setQuotaDirty] = useState(false);
   const [manualExpiry, setManualExpiry] = useState('');
+  const [expiryDirty, setExpiryDirty] = useState(false);
+  const [expiryTimezone, setExpiryTimezone] = useState(browserTimezone());
   const [resetConfigured, setResetConfigured] = useState(false);
   const [resetDay, setResetDay] = useState('1');
   const [resetHour, setResetHour] = useState('0');
@@ -109,8 +176,14 @@ export function SubscriptionForm({
           ? String(Math.round((subscription.quota_bytes / GB) * 100) / 100)
           : ''
       );
+      const expiryZone = subscription.timezone || browserTimezone();
+      setExpiryTimezone(expiryZone);
+      setQuotaDirty(false);
+      setExpiryDirty(false);
       setManualExpiry(
-        subscription.expires_source === 'manual' ? toDateInput(subscription.expires_at) : ''
+        subscription.expires_source === 'manual'
+          ? toDateTimeInput(subscription.expires_at, expiryZone)
+          : ''
       );
       const hasReset = subscription.reset_day >= 1;
       setResetConfigured(hasReset);
@@ -125,7 +198,10 @@ export function SubscriptionForm({
       setProviderTouched(false);
       setEnabled(true);
       setQuotaGB('');
+      setQuotaDirty(false);
       setManualExpiry('');
+      setExpiryDirty(false);
+      setExpiryTimezone(browserTimezone());
       setResetConfigured(false);
       setResetDay('1');
       setResetHour('0');
@@ -168,6 +244,7 @@ export function SubscriptionForm({
     const trimmedProvider = providerName.trim() || trimmedName;
     const trimmedUrl = url.trim();
     const quota = quotaGB.trim() === '' ? null : Number(quotaGB);
+    const manualExpiryISO = manualExpiry ? wallTimeToISO(manualExpiry, expiryTimezone) : '';
     const day = resetConfigured ? Number(resetDay) : 0;
     const hour = resetConfigured ? Number(resetHour) : 0;
     const minute = resetConfigured ? Number(resetMinute) : 0;
@@ -196,6 +273,10 @@ export function SubscriptionForm({
       return;
     }
     if (resetConfigured && !validTimezone(timezone.trim())) {
+      setFormError(t('subscriptions.formInvalid'));
+      return;
+    }
+    if (expiryDirty && manualExpiry && manualExpiryISO === null) {
       setFormError(t('subscriptions.formInvalid'));
       return;
     }
@@ -228,11 +309,14 @@ export function SubscriptionForm({
     // Linking an existing provider must not send a URL (the backend rejects
     // it and would otherwise overwrite the shared provider entry).
     if (!existingProvider && trimmedUrl) input.url = trimmedUrl;
-    // Explicit 0 means "no manual quota supplement" on update; null would
-    // keep the previous manual value.
-    input.quota_bytes = quota !== null ? Math.round(quota * GB) : 0;
-    // Empty string clears a manual expiry; null/omitted would keep it.
-    input.manual_expire = manualExpiry ? `${manualExpiry}T00:00:00Z` : '';
+    // Only send supplement fields the user deliberately changed. Omitting
+    // them preserves vendor/manual values already stored by the backend.
+    if (quotaDirty) {
+      input.quota_bytes = quota !== null ? Math.round(quota * GB) : 0;
+    }
+    if (expiryDirty) {
+      input.manual_expire = manualExpiryISO ?? '';
+    }
     input.traffic_provider_id = trafficProviderID;
 
     setSaving(true);
@@ -343,7 +427,10 @@ export function SubscriptionForm({
                 min={0}
                 step="0.01"
                 value={quotaGB}
-                onChange={(e) => setQuotaGB(e.target.value)}
+                onChange={(e) => {
+                  setQuotaGB(e.target.value);
+                  setQuotaDirty(true);
+                }}
                 placeholder={effectiveQuota ?? ''}
               />
               <p className="text-xs text-muted-foreground">
@@ -451,12 +538,34 @@ export function SubscriptionForm({
             </h3>
             <div className="space-y-1.5">
               <Label htmlFor="subscription-expiry">{t('subscriptions.manualExpiry')}</Label>
-              <Input
-                id="subscription-expiry"
-                type="date"
-                value={manualExpiry}
-                onChange={(e) => setManualExpiry(e.target.value)}
-              />
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  id="subscription-expiry"
+                  type="datetime-local"
+                  step={1}
+                  value={manualExpiry}
+                  onChange={(e) => {
+                    setManualExpiry(e.target.value);
+                    setExpiryDirty(true);
+                  }}
+                />
+                <Input
+                  id="subscription-expiry-timezone"
+                  aria-label={t('subscriptions.manualExpiryTimezone')}
+                  value={expiryTimezone}
+                  list="subscription-expiry-timezones"
+                  onChange={(e) => {
+                    setExpiryTimezone(e.target.value);
+                    setExpiryDirty(true);
+                  }}
+                  placeholder={t('subscriptions.serverTimezone')}
+                />
+              </div>
+              <datalist id="subscription-expiry-timezones">
+                {[...new Set([browserTimezone(), ...COMMON_TIMEZONES, expiryTimezone])].map((tz) => (
+                  <option key={tz} value={tz} />
+                ))}
+              </datalist>
               <p className="text-xs text-muted-foreground">
                 {t('subscriptions.manualExpiryHint')} {t('subscriptions.clearManualExpiry')}
                 {vendorExpiry ? ` ${t('subscriptions.vendorExpiry', { value: vendorExpiry })}` : ''}
