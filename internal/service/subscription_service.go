@@ -103,25 +103,42 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 		if err != nil || entry.URL == "" {
 			continue
 		}
-		info, err := s.fetchUserinfo(entry.URL)
+		fetchURL := entry.URL
+		info, err := s.fetchUserinfo(fetchURL)
 		if err != nil {
 			slog.Debug("subscription: auto userinfo refresh failed", "subscription", sub.Name, "err", err)
 			continue // keep last success; do not mark error for background polls
 		}
+		// Re-read and persist snapshot fields only; drop results fetched from
+		// a URL that is no longer current for the row's provider.
+		fresh, gerr := s.subs.Get(sub.ID)
+		if gerr != nil {
+			continue
+		}
+		cur, cerr := s.findProviderEntry(fresh.ProviderName)
+		if cerr != nil || cur.URL != fetchURL {
+			continue
+		}
 		now := s.nowFn()
-		sub.UserinfoUpload = info.Upload
-		sub.UserinfoDownload = info.Download
-		sub.UserinfoTotal = info.Total
-		sub.UserinfoExpire = info.Expire
-		sub.UserinfoCountersSeen = info.HasCounters
-		sub.UserinfoFetchedAt = model.NewNullTime(now)
-		sub.LastSuccessAt = model.NewNullTime(now)
-		sub.LastRefreshError = ""
-		if err := s.subs.Update(sub); err != nil {
+		fresh.UserinfoUpload = info.Upload
+		fresh.UserinfoDownload = info.Download
+		fresh.UserinfoTotal = info.Total
+		fresh.UserinfoExpire = info.Expire
+		fresh.UserinfoCountersSeen = info.HasCounters
+		fresh.UserinfoFetchedAt = model.NewNullTime(now)
+		fresh.LastSuccessAt = model.NewNullTime(now)
+		fresh.LastRefreshError = ""
+		if err := s.subs.Update(fresh); err != nil {
 			slog.Warn("subscription: auto userinfo persist failed", "subscription", sub.Name, "err", err)
 		}
 	}
 }
+
+// ErrConflict marks uniqueness violations (duplicate subscription name or a
+// provider already managed by another subscription) — mapped to HTTP 409.
+type ErrConflict struct{ Message string }
+
+func (e *ErrConflict) Error() string { return e.Message }
 
 // ErrReferenced is returned when deletion is blocked by config references.
 type ErrReferenced struct {
@@ -612,7 +629,10 @@ func (s *SubscriptionService) Create(req *SubscriptionRequest) (*SubscriptionVie
 		return nil, false, err
 	}
 	if _, err := s.subs.GetByName(sub.Name); err == nil {
-		return nil, false, fmt.Errorf("subscription %q already exists", sub.Name)
+		return nil, false, &ErrConflict{fmt.Sprintf("subscription %q already exists", sub.Name)}
+	}
+	if other, err := s.subs.GetByProvider(sub.ProviderName); err == nil && other.ID != sub.ID {
+		return nil, false, &ErrConflict{fmt.Sprintf("provider %q is already managed by subscription %q; a provider cannot be shared", sub.ProviderName, other.Name)}
 	}
 
 	draftChanged := false
@@ -690,8 +710,11 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 	}
 	if sub.Name != oldName {
 		if _, err := s.subs.GetByName(sub.Name); err == nil {
-			return nil, false, fmt.Errorf("subscription %q already exists", sub.Name)
+			return nil, false, &ErrConflict{fmt.Sprintf("subscription %q already exists", sub.Name)}
 		}
+	}
+	if other, err := s.subs.GetByProvider(sub.ProviderName); err == nil && other.ID != sub.ID {
+		return nil, false, &ErrConflict{fmt.Sprintf("provider %q is already managed by subscription %q; a provider cannot be shared", sub.ProviderName, other.Name)}
 	}
 	if sub.ProviderName != oldProvider {
 		if _, err := s.findProviderEntry(sub.ProviderName); err != nil {
@@ -781,31 +804,35 @@ func (e *RefreshError) Error() string { return e.Message }
 // Refresh re-fetches vendor userinfo, asks the running mihomo to refresh the
 // provider, and re-enqueues discovered nodes. It never publishes and never
 // touches mode/selector state.
+// Refresh re-fetches vendor userinfo, asks the running mihomo to refresh the
+// provider, and re-enqueues discovered nodes. It never publishes and never
+// touches mode/selector state.
+//
+// Concurrency: the network fetch happens against a snapshot; afterwards the
+// row is RE-READ and only snapshot/status fields are persisted, so concurrent
+// name/enabled/reset edits are never clobbered. If the provider or its URL
+// changed while fetching, the stale-source result is discarded.
 func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshError) {
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, &RefreshError{Code: "not_found", Message: "subscription not found"}
 	}
 	now := s.nowFn()
-	sub.LastRefreshAt = model.NewNullTime(now)
 
 	entry, entryErr := s.findProviderEntry(sub.ProviderName)
+	fetchURL := entry.URL
+	var info *model.TrafficUserinfo
 	var refErr *RefreshError
 
 	if entryErr == nil && entry.URL != "" {
-		info, ferr := s.fetchUserinfo(entry.URL)
+		fetched, ferr := s.fetchUserinfo(entry.URL)
 		switch {
 		case ferr == nil:
-			sub.UserinfoUpload = info.Upload
-			sub.UserinfoDownload = info.Download
-			sub.UserinfoTotal = info.Total
-			sub.UserinfoExpire = info.Expire
-			sub.UserinfoCountersSeen = info.HasCounters
-			sub.UserinfoFetchedAt = model.NewNullTime(now)
+			info = fetched
 		default:
 			var rl *RateLimitError
 			if errors.As(ferr, &rl) {
-				secs := int(clampDuration(rl.RetryAfter, time.Minute, MaxBackoff).Seconds())
+				secs := int(respectRetryAfter(rl.RetryAfter).Seconds())
 				refErr = &RefreshError{Code: "rate_limited", Message: "subscription server rate limited; vendor snapshot kept", RetryAfterSecond: secs}
 			} else {
 				refErr = &RefreshError{Code: "userinfo_failed", Message: "userinfo fetch failed: " + sanitizeMessage(ferr)}
@@ -827,13 +854,44 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 		}
 	}
 
-	if refErr == nil {
-		sub.LastSuccessAt = model.NewNullTime(now)
-		sub.LastRefreshError = ""
-	} else {
-		sub.LastRefreshError = refErr.Message
+	// Re-read the row: concurrent metadata edits must survive this refresh.
+	fresh, rerr := s.subs.Get(id)
+	if rerr != nil {
+		return nil, &RefreshError{Code: "internal", Message: rerr.Error()}
 	}
-	if err := s.subs.Update(sub); err != nil {
+	fresh.LastRefreshAt = model.NewNullTime(now)
+
+	if info != nil {
+		// Stale-source guard: only apply results fetched from the URL that is
+		// still current for the row's (possibly renamed) provider.
+		stale := true
+		if cur, cerr := s.findProviderEntry(fresh.ProviderName); cerr == nil && cur.URL == fetchURL {
+			stale = false
+		}
+		if stale {
+			if refErr == nil {
+				refErr = &RefreshError{Code: "userinfo_failed", Message: "provider or URL changed during refresh; fetched snapshot discarded"}
+			}
+			fresh.LastRefreshError = refErr.Message
+		} else {
+			fresh.UserinfoUpload = info.Upload
+			fresh.UserinfoDownload = info.Download
+			fresh.UserinfoTotal = info.Total
+			fresh.UserinfoExpire = info.Expire
+			fresh.UserinfoCountersSeen = info.HasCounters
+			fresh.UserinfoFetchedAt = model.NewNullTime(now)
+		}
+	}
+
+	if refErr == nil {
+		if info != nil {
+			fresh.LastSuccessAt = model.NewNullTime(now)
+		}
+		fresh.LastRefreshError = ""
+	} else {
+		fresh.LastRefreshError = refErr.Message
+	}
+	if err := s.subs.Update(fresh); err != nil {
 		return nil, &RefreshError{Code: "internal", Message: err.Error()}
 	}
 
@@ -843,15 +901,12 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 		s.scorer.Wake()
 	}
 
-	v, verr := s.View(sub)
+	v, verr := s.View(fresh)
 	if verr != nil {
 		return nil, &RefreshError{Code: "internal", Message: verr.Error()}
 	}
 	return v, refErr
 }
-
-// fetchUserinfo GETs the subscription URL and parses the
-// subscription-userinfo header. Errors never contain the URL.
 func (s *SubscriptionService) fetchUserinfo(rawURL string) (*model.TrafficUserinfo, error) {
 	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 	if err != nil {

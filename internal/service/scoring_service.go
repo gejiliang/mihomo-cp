@@ -83,6 +83,10 @@ type ScoringService struct {
 	defaultRunner *MihomoIsolation
 	cachedBinary  string
 
+	// inflight coalesces concurrent scoring requests for the same egress IP
+	// and required sources (guarded by mu).
+	inflight map[string]*inflightScore
+
 	// overridable endpoints (tests)
 	claudeTraceURL string
 	cfTraceURL     string
@@ -126,6 +130,7 @@ func NewScoringService(
 		cfTraceURL:     defaultCFTraceURL,
 		netcoffeeBase:  defaultNetCoffeeBase,
 		provNodes:      map[string]provNodes{},
+		inflight:       map[string]*inflightScore{},
 		nowFn:          time.Now,
 	}
 }
@@ -598,6 +603,74 @@ func (s *ScoringService) materialize(row model.NodeScore) (*IsolationTopology, e
 	}
 }
 
+// pinGroupSelections materializes the production runtime selection of every
+// group in the topology into the isolated config. Putting the current member
+// first does NOT pin url-test/fallback (child health checks may switch), so
+// each group with a single runtime choice is materialized as a one-member
+// select containing ONLY the actually selected member; its chain is then
+// resolved by the surrounding topology. Load-balance and other types without
+// a single runtime selection are an explicit error — a nondeterministic child
+// choice must never be recorded as the actual production egress. This is
+// strictly read-only against production: GET /proxies/{name} only.
+func (s *ScoringService) pinGroupSelections(topo *IsolationTopology) error {
+	if len(topo.Groups) == 0 {
+		return nil // no groups in the topology: nothing to pin, no controller needed
+	}
+	st, err := s.settings.Get()
+	if err != nil {
+		return fmt.Errorf("read settings for runtime selections: %w", err)
+	}
+	if strings.TrimSpace(st.ExtController) == "" {
+		return fmt.Errorf("mihomo external controller not configured; cannot resolve current group selections")
+	}
+	mc := NewMihomoClient(st.ExtController, st.ExtSecret)
+	for _, g := range topo.Groups {
+		name, _ := g["name"].(string)
+		gtype, _ := g["type"].(string)
+		if name == "" {
+			continue
+		}
+		switch gtype {
+		case "selector", "fallback", "url-test":
+			now, err := mc.GetProxyNow(name)
+			if err != nil {
+				return fmt.Errorf("resolve current selection of group %q: %w", name, err)
+			}
+			if now == "" {
+				return fmt.Errorf("group %q has no current selection", name)
+			}
+			// Materialize as an immutable single-member select: exactly the
+			// member production currently uses, nothing else to switch to.
+			g["type"] = "selector"
+			g["proxies"] = []string{now}
+			// The selected member's own chain (nested group or dialer-proxy
+			// dependencies) is already materialized by ResolveDialerDeps /
+			// provider resolution; verify it is present.
+			if !topoHasEntity(topo, now) {
+				return fmt.Errorf("current selection %q of group %q is not materialized in the isolated topology", now, name)
+			}
+		default:
+			// load-balance and anything without a single runtime choice
+			return fmt.Errorf("group %q (type %q) has no single runtime selection; unsupported for isolated egress scoring", name, gtype)
+		}
+	}
+	return nil
+}
+
+func topoHasEntity(topo *IsolationTopology, name string) bool {
+	for _, n := range topo.Nodes {
+		if n["name"] == name {
+			return true
+		}
+	}
+	for _, g := range topo.Groups {
+		if g["name"] == name {
+			return true
+		}
+	}
+	return false
+}
+
 // processNode runs one full probe and persists the outcome.
 func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 	logCtx := slog.With("node", row.NodeKey)
@@ -605,6 +678,11 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 	if err != nil {
 		s.fail(row, ErrCodeConfigMissing, sanitizeMessage(err), s.nowFn())
 		logCtx.Warn("scoring: materialize failed", "err", err)
+		return
+	}
+	if err := s.pinGroupSelections(topo); err != nil {
+		s.fail(row, ErrCodeConfigMissing, sanitizeMessage(err), s.nowFn())
+		logCtx.Warn("scoring: cannot pin runtime group selections", "err", err)
 		return
 	}
 
@@ -652,9 +730,9 @@ func (s *ScoringService) processNode(ctx context.Context, row model.NodeScore) {
 		row.ErrorCode = ErrCodeRateLimited
 		row.LastError = sanitizeMessage(rateLimit)
 		row.CheckedAt = model.NewNullTime(now)
-		row.NextDue = model.NewNullTime(now.Add(clampDuration(rateLimit.RetryAfter, time.Minute, MaxBackoff)))
+		row.NextDue = model.NewNullTime(now.Add(respectRetryAfter(rateLimit.RetryAfter)))
 		_ = s.scores.Upsert(&row)
-		s.coolGlobal(clampDuration(rateLimit.RetryAfter, time.Minute, MaxBackoff))
+		s.coolGlobal(respectRetryAfter(rateLimit.RetryAfter))
 		logCtx.Warn("scoring: rate limited", "retry_after", rateLimit.RetryAfter)
 		return
 	}
@@ -698,8 +776,27 @@ type probeResult struct {
 	lookupMatch      string
 }
 
+// inflightScore coalesces concurrent scoring requests for the same
+// egress IP + required-source combination so a burst of nodes sharing one
+// exit triggers exactly one pair of vendor calls.
+type inflightScore struct {
+	done chan struct{}
+	res  probeResult
+	info json.RawMessage
+	err  error
+	rl   *RateLimitError
+}
+
 // collectScores fetches the two independent public sources (with per-egress-IP
-// dedup) and assembles the stored ip_info document.
+// dedup and single-flight coalescing) and assembles the stored ip_info
+// document.
+//
+// Cache integrity: only results COMPLETE for the requested sources are cached
+// as full success. A partial run (e.g. the Claude source failed while lookup
+// answered) is NOT written to the egress cache — otherwise a later hit would
+// silently "heal" the status and prevent retrying the missing source. A cache
+// entry missing a source that the current request requires does not satisfy
+// that request either.
 func (s *ScoringService) collectScores(ctx context.Context, client *http.Client, queryIP string, claudeVisible bool) (probeResult, json.RawMessage, *RateLimitError, error) {
 	var res probeResult
 	res.claudeMatch = model.IPMatchUnknown
@@ -707,7 +804,8 @@ func (s *ScoringService) collectScores(ctx context.Context, client *http.Client,
 
 	// Dedup: reuse a fresh cached scoring for the same egress IP — the node
 	// still proves its own egress via the traces, but the vendor APIs are not
-	// re-queried for an IP we already scored inside the TTL.
+	// re-queried for an IP we already scored inside the TTL. The cache only
+	// satisfies requests whose required sources are all present.
 	if cached, err := s.scores.GetEgressIPScore(queryIP); err == nil && !cached.FetchedAt.IsZero() && s.nowFn().Sub(cached.FetchedAt.Time) < EgressCacheTTL {
 		var info struct {
 			Claude *claudeInfoLite `json:"claude"`
@@ -717,9 +815,37 @@ func (s *ScoringService) collectScores(ctx context.Context, client *http.Client,
 			res.claudeMatch = info.Claude.IPMatch
 			res.claudeResponseIP = info.Claude.ResponseIP
 		}
-		res.lookupMatch = lookupMatchFromInfo(cached.IPInfo.Bytes)
-		return res, cached.IPInfo.Bytes, nil, nil
+		lm := lookupMatchFromInfo(cached.IPInfo.Bytes)
+		if claudeVisible && info.Claude == nil {
+			// Cached entry lacks the required Claude source — treat as miss.
+			slog.Debug("scoring: cached entry missing required claude source; re-fetching", "egress", queryIP)
+		} else {
+			res.lookupMatch = lm
+			return res, cached.IPInfo.Bytes, nil, nil
+		}
 	}
+
+	// Single-flight: coalesce concurrent misses for the same IP + sources.
+	key := queryIP + "|" + map[bool]string{true: "claude+lookup", false: "lookup"}[claudeVisible]
+	s.mu.Lock()
+	if fl, ok := s.inflight[key]; ok {
+		s.mu.Unlock()
+		select {
+		case <-fl.done:
+		case <-ctx.Done():
+			return res, nil, nil, ctx.Err()
+		}
+		return fl.res, fl.info, fl.rl, fl.err
+	}
+	fl := &inflightScore{done: make(chan struct{})}
+	s.inflight[key] = fl
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.inflight, key)
+		close(fl.done)
+		s.mu.Unlock()
+	}()
 
 	nc := &NetCoffeeClient{BaseURL: s.netcoffeeBase, HTTP: client}
 	var (
@@ -732,11 +858,13 @@ func (s *ScoringService) collectScores(ctx context.Context, client *http.Client,
 	if claudeVisible {
 		risk, rerr = nc.FetchClaudeTrust(ctx, queryIP)
 		if rl, ok := rerr.(*RateLimitError); ok {
+			fl.rl, fl.res = rl, res
 			return res, nil, rl, nil
 		}
 	}
 	lookup, lmatch, lerr = nc.FetchIPLookup(ctx, queryIP)
 	if rl, ok := lerr.(*RateLimitError); ok {
+		fl.rl, fl.res = rl, res
 		return res, nil, rl, nil
 	}
 
@@ -748,7 +876,9 @@ func (s *ScoringService) collectScores(ctx context.Context, client *http.Client,
 	res.lookupMatch = lmatch
 
 	if rerr != nil && lerr != nil {
-		return res, nil, nil, fmt.Errorf("both sources failed: %v; %v", rerr, lerr)
+		err := fmt.Errorf("both sources failed: %v; %v", rerr, lerr)
+		fl.res, fl.err = res, err
+		return res, nil, nil, err
 	}
 	var partial error
 	if rerr != nil {
@@ -758,13 +888,19 @@ func (s *ScoringService) collectScores(ctx context.Context, client *http.Client,
 	}
 
 	info := buildIPInfo(queryIP, risk, lookup)
-	if err := s.scores.PutEgressIPScore(&store.EgressIPScore{
-		EgressIP:    queryIP,
-		ClaudeScore: res.claudeScore,
-		IPInfo:      model.NullJSON{Bytes: info},
-	}); err != nil {
-		slog.Warn("scoring: egress cache write failed", "err", err)
+	// Cache only complete-for-required-sources results; partial results are
+	// returned to the caller but never stored, so the missing source is
+	// retried on the next due cycle.
+	if partial == nil {
+		if err := s.scores.PutEgressIPScore(&store.EgressIPScore{
+			EgressIP:    queryIP,
+			ClaudeScore: res.claudeScore,
+			IPInfo:      model.NullJSON{Bytes: info},
+		}); err != nil {
+			slog.Warn("scoring: egress cache write failed", "err", err)
+		}
 	}
+	fl.res, fl.info, fl.err = res, info, partial
 	return res, info, nil, partial
 }
 
@@ -852,6 +988,17 @@ func fetchTraceIP(ctx context.Context, client *http.Client, traceURL string) (st
 		}
 	}
 	return "", fmt.Errorf("no ip= line in trace response")
+}
+
+// respectRetryAfter returns the upstream-requested wait, never shortened.
+// A small floor only prevents dense retries when the header is missing or
+// zero; a LONG upstream value (e.g. 48h) is preserved as-is — MaxBackoff caps
+// only our own exponential retry backoff.
+func respectRetryAfter(d time.Duration) time.Duration {
+	if d < time.Minute {
+		return time.Minute
+	}
+	return d
 }
 
 // fail marks a row failed with backoff. Single failures never block the queue.

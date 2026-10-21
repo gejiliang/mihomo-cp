@@ -94,6 +94,22 @@ func (c *MihomoClient) GetProxies() (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
+// GetProxyNow returns the currently selected member ("now") of a proxy or
+// group from the running mihomo. Read-only — it never changes any selection.
+func (c *MihomoClient) GetProxyNow(name string) (string, error) {
+	data, err := c.do(http.MethodGet, "/proxies/"+url.PathEscape(name), nil)
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		Now string `json:"now"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return "", fmt.Errorf("parse proxy %q: %w", name, err)
+	}
+	return info.Now, nil
+}
+
 // GetProxyDelay returns raw JSON from GET /proxies/:name/delay?url=&timeout=.
 func (c *MihomoClient) GetProxyDelay(name, testURL string, timeout int) (json.RawMessage, error) {
 	q := url.Values{}

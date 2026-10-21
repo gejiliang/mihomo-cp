@@ -123,6 +123,11 @@ func statusForRefreshCode(code string) int {
 // writeSubError maps service errors onto API errors. Referenced-provider
 // deletions surface their references for the GUI.
 func writeSubError(w http.ResponseWriter, err error) {
+	var conflict *service.ErrConflict
+	if errors.As(err, &conflict) {
+		Error(w, 409, "conflict", conflict.Message)
+		return
+	}
 	var ref *service.ErrReferenced
 	if errors.As(err, &ref) {
 		w.Header().Set("Content-Type", "application/json")
@@ -139,8 +144,10 @@ func writeSubError(w http.ResponseWriter, err error) {
 		return
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "already exists") {
-		Error(w, 409, "conflict", msg)
+	if strings.Contains(msg, "UNIQUE constraint failed") {
+		// Concurrent duplicate create raced past the pre-check and hit the DB
+		// unique index — surface it as a conflict, not a bad request.
+		Error(w, 409, "conflict", "subscription or provider already managed")
 		return
 	}
 	Error(w, 400, "bad_request", msg)

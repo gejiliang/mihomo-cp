@@ -127,7 +127,11 @@ Field semantics:
   **created in the draft** with `{type: http, url, path: "providers/proxies/<name>.yaml",
   interval: 86400}` (`provider_source: "created"`).
 - Same-name duplicates are rejected (`409 {"error":{"code":"conflict"}}`) —
-  both subscription names and provider keys must be unique.
+  subscription **names and provider keys must each be unique server-side**
+  (enforced by pre-checks and a DB unique index; a concurrent duplicate
+  create surfaces as 409 from the constraint). One subscription manages one
+  provider — sharing a provider between records is rejected so deleting one
+  can never remove another record's provider.
 - `PUT /api/subscriptions/{id}` accepts the same body; an absent/empty `url`
   keeps the stored provider URL untouched. `timezone` accepts any IANA name
   and is validated (`400 {"error":{"code":"bad_request"}}` otherwise).
@@ -269,13 +273,28 @@ Semantics:
   `range_only` describe the Claude source; `ip_info.lookup.ip_match` carries
   the comprehensive source's own validation. Scores from the two sources are
   never merged into one number.
-- If the vendor answered for a same-/24 neighbor instead of the exact IP,
-  `range_only=true` and the score is CIDR-level data, displayed as such —
-  never presented as a precise single-IP score.
+- If the vendor answered for a neighbor IP instead of the exact one,
+  `range_only=true` — accepted ONLY when the response's own declared CIDR
+  parses and covers both the queried and the returned IP; same-/24/-64 alone
+  is not proof, and without a valid covering CIDR the row is marked
+  `ip_mismatch`. A neighbor match is a reference datapoint about a nearby
+  address, never a precise score for the queried IP and never proof that the
+  whole CIDR shares that score.
+- Egress-IP score caching stores only results COMPLETE for the requested
+  sources; partial runs (e.g. the Claude source failed) are not cached and the
+  missing source is retried on a later cycle. Concurrent probes of nodes
+  sharing one exit IP are coalesced into one pair of vendor calls.
 - The egress IP is observed through the real complete node exit (isolated
   mihomo instance, loopback-only, no TUN/DNS hijack, production
   mode/selectors untouched). `exit_ip_source` says which trace produced it
   (`claude-trace` = claude.ai `/cdn-cgi/trace`; `cloudflare-trace` fallback).
+- When the node's chain contains groups, the production runtime selection is
+  resolved READ-ONLY (`GET /proxies/{name}`) and each selector/fallback/url-test
+  group is materialized in the isolated config as a single-member select
+  containing exactly the currently selected member; load-balance or groups
+  without a single runtime choice fail the probe explicitly (`config_missing`)
+  instead of recording a nondeterministic child choice as the production
+  egress. No production selector writes ever happen.
 - Rows include queued (`pending`) and failed (`error`) nodes — the list is the
   queue view, not just successful results.
 
