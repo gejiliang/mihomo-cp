@@ -275,6 +275,9 @@ const EMPTY_FORM = {
   name: '',
   quotaGB: '',
   resetDay: '1',
+  resetHour: '0',
+  resetMinute: '0',
+  resetTimezone: '',
   patterns: '',
   subscriptionUrl: '',
   enabled: true,
@@ -355,6 +358,9 @@ export default function TrafficPage() {
       name: p.name,
       quotaGB: p.quota_bytes > 0 ? String(Math.round((p.quota_bytes / GB) * 100) / 100) : '',
       resetDay: String(p.reset_day),
+      resetHour: String(p.reset_hour ?? 0),
+      resetMinute: String(p.reset_minute ?? 0),
+      resetTimezone: p.reset_timezone ?? '',
       patterns: p.node_patterns.join(', '),
       subscriptionUrl: p.subscription_url,
       enabled: p.enabled,
@@ -365,7 +371,30 @@ export default function TrafficPage() {
   const saveProvider = async () => {
     const quotaGB = parseFloat(form.quotaGB);
     const resetDay = parseInt(form.resetDay, 10);
-    if (!form.name.trim() || isNaN(quotaGB) || quotaGB < 0 || isNaN(resetDay)) {
+    const resetHour = parseInt(form.resetHour, 10);
+    const resetMinute = parseInt(form.resetMinute, 10);
+    const timezone = form.resetTimezone.trim();
+    let validTimezone = true;
+    try {
+      if (timezone) new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    } catch {
+      validTimezone = false;
+    }
+    if (
+      !form.name.trim() ||
+      isNaN(quotaGB) ||
+      quotaGB < 0 ||
+      isNaN(resetDay) ||
+      resetDay < 1 ||
+      resetDay > 31 ||
+      isNaN(resetHour) ||
+      resetHour < 0 ||
+      resetHour > 23 ||
+      isNaN(resetMinute) ||
+      resetMinute < 0 ||
+      resetMinute > 59 ||
+      !validTimezone
+    ) {
       toast.error(t('traffic.formInvalid'));
       return;
     }
@@ -373,6 +402,9 @@ export default function TrafficPage() {
       name: form.name.trim(),
       quota_bytes: Math.round(quotaGB * GB),
       reset_day: resetDay,
+      reset_hour: resetHour,
+      reset_minute: resetMinute,
+      reset_timezone: timezone,
       node_patterns: form.patterns
         .split(/[,，]/)
         .map((s) => s.trim())
@@ -640,6 +672,39 @@ export default function TrafficPage() {
                 />
               </div>
             </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label>{t('traffic.resetHour')}</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={form.resetHour}
+                  onChange={(e) => setForm({ ...form, resetHour: e.target.value })}
+                  placeholder="0"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t('traffic.resetMinute')}</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={59}
+                  value={form.resetMinute}
+                  onChange={(e) => setForm({ ...form, resetMinute: e.target.value })}
+                  placeholder="0"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t('traffic.resetTimezone')}</Label>
+                <Input
+                  value={form.resetTimezone}
+                  onChange={(e) => setForm({ ...form, resetTimezone: e.target.value })}
+                  placeholder="Asia/Shanghai"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('traffic.resetTimezoneHint')}</p>
             <div className="space-y-1.5">
               <Label>{t('traffic.nodePatterns')}</Label>
               <Input

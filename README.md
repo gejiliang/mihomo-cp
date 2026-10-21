@@ -14,7 +14,9 @@ Web-based management panel for [mihomo](https://github.com/MetaCubeX/mihomo) pro
 - **Publish Center** — Preview diff, validate (structural + mihomo binary check), publish, discard changes, rollback, version history with date-prefixed versions (e.g., `20260324-1`)
 - **Overview Dashboard** — Active connections with close/add-rule actions (auto-refresh), proxy list with concurrent batch latency testing
 - **Runtime Monitor** — Live connections with search/close, proxy groups with delay testing and switching, running rules/providers, quick "add rule" from connection host
-- **Traffic Accounting & Quota Alerts** — Per-vendor monthly quota tracking: local per-node accounting (polls `/connections`, attributes deltas to the outbound node), optional vendor-reported usage via the `subscription-userinfo` header, billing-cycle aware (custom reset day), daily usage chart, and threshold alerts (once per cycle) via Bark / ntfy / webhook
+- **Traffic Accounting & Quota Alerts** — Per-vendor monthly quota tracking: local per-node accounting (polls `/connections`, attributes deltas to the outbound node), optional vendor-reported usage via the `subscription-userinfo` header, billing-cycle aware (custom reset day + hour/minute + IANA timezone), daily usage chart, and threshold alerts (once per cycle) via Bark / ntfy / webhook
+- **Subscription Management** — CRUD + refresh for native `proxy-providers` subscriptions with vendor-reported usage, expiry and quota supplements, precise reset schedules (day/hour/minute, IANA timezone — e.g. the 10th 12:00 Asia/Shanghai), clamped remaining traffic, unknown-never-zero display, draft-only edits flowing through the existing Publish Center, and URL masking (subscription URLs never leave the server)
+- **Node Exit-IP Scoring** — Real full-node egress tests through throwaway isolated mihomo instances (loopback-only, no TUN/DNS hijack, operator-configured physical underlay interface + explicit DNS upstreams), scored via the public [Net.Coffee](https://ip.net.coffee) APIs: Claude trust score (0–100, higher = more trusted; a third-party score, not an Anthropic official one) plus comprehensive IP intelligence (ASN, country, residential/datacenter, VPN/proxy/Tor/abuse flags). Per-source response-IP validation (exact vs same-/24 CIDR vs mismatch), per-egress-IP score dedup, 7-day automatic refresh with persisted queue (restart-safe), backoff + Retry-After handling, and manual single/batch refresh
 - **i18n** — Chinese and English, switchable from header dropdown
 - **Auth** — JWT-based login, admin/readonly roles, user management, password change
 - **Single Binary** — Frontend embedded via `embed.FS`, no separate web server needed
@@ -147,6 +149,19 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | DELETE | `/settings/config-yaml`           | Clear config YAML draft    |
 | GET    | `/settings/users`                 | List users (admin only)    |
 | POST   | `/settings/users`                 | Create user (admin only)   |
+| GET    | `/subscriptions`                  | List subscriptions with status |
+| POST   | `/subscriptions`                  | Create subscription (draft; admin only) |
+| GET    | `/subscriptions/providers`        | Native providers available for linking |
+| GET    | `/subscriptions/{id}`             | One subscription with status |
+| PUT    | `/subscriptions/{id}`             | Update subscription (draft; admin only) |
+| DELETE | `/subscriptions/{id}`             | Delete subscription + draft provider (admin only; 409 with references when groups still `use` it) |
+| POST   | `/subscriptions/{id}/refresh`     | Refresh userinfo + provider (admin only) |
+| GET    | `/node-scores`                    | Node exit-IP scores & queue state |
+| GET    | `/node-scores/{id}`               | One node score (id percent-encoded) |
+| POST   | `/node-scores/{id}/refresh`       | Queue one node re-score (admin only) |
+| POST   | `/node-scores/refresh`            | Queue batch re-score `{ids}` or `{all}` (admin only) |
+
+See [docs/subscription-score-api.md](docs/subscription-score-api.md) for the full subscription & scoring contract, including the operator-configurable egress isolation settings (`isolation_interface`, `isolation_dns`).
 
 ## License
 

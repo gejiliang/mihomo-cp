@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, ActivityIcon, LoaderIcon } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Link } from 'react-router-dom';
+import { PlusIcon, ActivityIcon, LoaderIcon, ShieldCheckIcon } from 'lucide-react';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -81,6 +82,10 @@ export default function ProxiesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">{t('proxies.title')}</h1>
         <div className="flex items-center gap-2">
+          <Link to="/node-scores" className={buttonVariants({ variant: 'outline' })}>
+            <ShieldCheckIcon className="h-3.5 w-3.5" />
+            {t('proxies.ipScores')}
+          </Link>
           <Button
             variant="outline"
             onClick={() => { setTestingAll(true); setTestAllTrigger((n) => n + 1); }}

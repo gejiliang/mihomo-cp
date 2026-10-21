@@ -32,12 +32,25 @@ func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, st)
 }
 
-// UpdateSettings handles PUT /api/settings
+// UpdateSettings handles PUT /api/settings. Isolation underlay fields are
+// merge-PUT: an empty value keeps the stored operator setting, so existing
+// clients that submit the full settings object cannot silently clear them.
 func (h *SettingsHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var st model.AppSettings
 	if err := DecodeJSON(r, &st); err != nil {
 		Error(w, 400, "bad_request", "invalid request body")
 		return
+	}
+	if st.IsolationInterface == "" || st.IsolationDNS == "" {
+		current, err := h.settings.Get()
+		if err == nil {
+			if st.IsolationInterface == "" {
+				st.IsolationInterface = current.IsolationInterface
+			}
+			if st.IsolationDNS == "" {
+				st.IsolationDNS = current.IsolationDNS
+			}
+		}
 	}
 	if err := h.settings.Update(&st); err != nil {
 		Error(w, 500, "internal", err.Error())

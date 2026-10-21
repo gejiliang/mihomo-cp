@@ -162,4 +162,84 @@ var migrations = []string{
 		updated_at       DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
 	INSERT OR IGNORE INTO traffic_settings (id) VALUES (1)`,
+
+	// 013: subscriptions — normalized metadata linked to native proxy-providers
+	`CREATE TABLE IF NOT EXISTS subscriptions (
+		id                    TEXT PRIMARY KEY,
+		name                  TEXT UNIQUE NOT NULL,
+		enabled               INTEGER NOT NULL DEFAULT 1,
+		provider_name         TEXT NOT NULL DEFAULT '',
+		quota_bytes           INTEGER NOT NULL DEFAULT 0,
+		manual_expire         INTEGER NOT NULL DEFAULT 0,
+		reset_day             INTEGER NOT NULL DEFAULT 0,
+		reset_hour            INTEGER NOT NULL DEFAULT 0,
+		reset_minute          INTEGER NOT NULL DEFAULT 0,
+		reset_timezone        TEXT NOT NULL DEFAULT '',
+		traffic_provider_id   TEXT NOT NULL DEFAULT '',
+		provider_source       TEXT NOT NULL DEFAULT 'created',
+		userinfo_upload       INTEGER NOT NULL DEFAULT 0,
+		userinfo_download     INTEGER NOT NULL DEFAULT 0,
+		userinfo_total        INTEGER NOT NULL DEFAULT 0,
+		userinfo_expire       INTEGER NOT NULL DEFAULT 0,
+		userinfo_counters     INTEGER NOT NULL DEFAULT 0,
+		userinfo_fetched_at   DATETIME,
+		last_refresh_at       DATETIME,
+		last_success_at       DATETIME,
+		last_refresh_error    TEXT NOT NULL DEFAULT '',
+		last_provider_update  DATETIME,
+		created_at            DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at            DATETIME NOT NULL DEFAULT (datetime('now'))
+	)`,
+
+	// 014: node exit-IP scoring state + per-egress-IP score cache
+	`CREATE TABLE IF NOT EXISTS node_scores (
+		node_key            TEXT PRIMARY KEY,
+		source              TEXT NOT NULL DEFAULT '',
+		node_name           TEXT NOT NULL DEFAULT '',
+		provider_name       TEXT NOT NULL DEFAULT '',
+		status              TEXT NOT NULL DEFAULT 'pending',
+		fingerprint         TEXT NOT NULL DEFAULT '',
+		claude_score        INTEGER,
+		claude_ip_match     TEXT NOT NULL DEFAULT 'unknown',
+		claude_response_ip  TEXT NOT NULL DEFAULT '',
+		lookup_match        TEXT NOT NULL DEFAULT 'unknown',
+		egress_ip           TEXT NOT NULL DEFAULT '',
+		exit_ip_source      TEXT NOT NULL DEFAULT '',
+		ip_info             TEXT,
+		error_code          TEXT NOT NULL DEFAULT '',
+		checked_at          DATETIME,
+		last_success_at     DATETIME,
+		next_due            DATETIME,
+		attempts            INTEGER NOT NULL DEFAULT 0,
+		last_error          TEXT NOT NULL DEFAULT '',
+		created_at          DATETIME NOT NULL DEFAULT (datetime('now')),
+		updated_at          DATETIME NOT NULL DEFAULT (datetime('now'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_node_scores_next_due ON node_scores (next_due);
+	CREATE TABLE IF NOT EXISTS egress_ip_scores (
+		egress_ip     TEXT PRIMARY KEY,
+		claude_score  INTEGER,
+		ip_info       TEXT,
+		fetched_at    DATETIME NOT NULL
+	)`,
+
+	// 015: extend monthly reset with hour/minute/IANA timezone (empty tz = server local, 0:00 = legacy behavior)
+	`ALTER TABLE traffic_providers ADD COLUMN reset_hour   INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE traffic_providers ADD COLUMN reset_minute INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE traffic_providers ADD COLUMN reset_timezone TEXT NOT NULL DEFAULT ''`,
+
+	// 018: a native provider must be managed by at most one subscription —
+	// otherwise deleting one duplicate would remove another record's provider.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_provider_name ON subscriptions(provider_name) WHERE provider_name != ''`,
+
+	// 017: persisted manual-refresh request flag for node scores — survives
+	// restarts and lets a paused subscription still serve explicit manual
+	// requests without overloading status/error semantics.
+	`ALTER TABLE node_scores ADD COLUMN manual_request INTEGER NOT NULL DEFAULT 0`,
+
+	// 016: generic egress-isolation underlay settings for the throwaway
+	// scoring instance. Empty values keep safe defaults; deployment-specific
+	// interface/DNS are set via the settings API by the operator.
+	`ALTER TABLE app_settings ADD COLUMN isolation_interface TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE app_settings ADD COLUMN isolation_dns TEXT NOT NULL DEFAULT ''`,
 }

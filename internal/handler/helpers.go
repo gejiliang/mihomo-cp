@@ -3,18 +3,22 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // APIResponse is the standard envelope for all API responses.
 type APIResponse struct {
-	Data  any        `json:"data,omitempty"`
-	Error *APIError  `json:"error,omitempty"`
+	Data  any       `json:"data,omitempty"`
+	Error *APIError `json:"error,omitempty"`
 }
 
 // APIError carries a machine-readable code and a human-readable message.
+// References optionally lists config objects (e.g. proxy-groups) that block
+// an operation, such as deleting a provider still referenced by groups.
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string   `json:"code"`
+	Message    string   `json:"message"`
+	References []string `json:"references,omitempty"`
 }
 
 // JSON writes a JSON-encoded response with the given status code.
@@ -35,4 +39,15 @@ func Error(w http.ResponseWriter, status int, code, message string) {
 func DecodeJSON(r *http.Request, v any) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// writeEnvelope writes an already-built APIResponse.
+func writeEnvelope(w http.ResponseWriter, resp APIResponse) {
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// rfc3339 formats a time as RFC3339 for API payloads.
+func rfc3339(t time.Time) *string {
+	s := t.Format(time.RFC3339)
+	return &s
 }

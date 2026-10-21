@@ -77,9 +77,9 @@ func (s *TrafficStore) CreateProvider(p *model.TrafficProvider) error {
 	now := time.Now().UTC()
 	p.CreatedAt, p.UpdatedAt = now, now
 	_, err := s.db.Exec(
-		`INSERT INTO traffic_providers (id, name, quota_bytes, reset_day, node_patterns, subscription_url, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.Name, p.QuotaBytes, p.ResetDay, p.NodePatterns, p.SubscriptionURL, p.Enabled, p.CreatedAt, p.UpdatedAt,
+		`INSERT INTO traffic_providers (id, name, quota_bytes, reset_day, reset_hour, reset_minute, reset_timezone, node_patterns, subscription_url, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.Name, p.QuotaBytes, p.ResetDay, p.ResetHour, p.ResetMinute, p.ResetTimezone, p.NodePatterns, p.SubscriptionURL, p.Enabled, p.CreatedAt, p.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create traffic provider: %w", err)
@@ -94,9 +94,9 @@ func (s *TrafficStore) UpdateProvider(p *model.TrafficProvider) error {
 	}
 	p.UpdatedAt = time.Now().UTC()
 	res, err := s.db.Exec(
-		`UPDATE traffic_providers SET name = ?, quota_bytes = ?, reset_day = ?, node_patterns = ?, subscription_url = ?, enabled = ?, updated_at = ?
+		`UPDATE traffic_providers SET name = ?, quota_bytes = ?, reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, node_patterns = ?, subscription_url = ?, enabled = ?, updated_at = ?
 		 WHERE id = ?`,
-		p.Name, p.QuotaBytes, p.ResetDay, p.NodePatterns, p.SubscriptionURL, p.Enabled, p.UpdatedAt, p.ID,
+		p.Name, p.QuotaBytes, p.ResetDay, p.ResetHour, p.ResetMinute, p.ResetTimezone, p.NodePatterns, p.SubscriptionURL, p.Enabled, p.UpdatedAt, p.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("update traffic provider: %w", err)

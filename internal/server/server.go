@@ -38,8 +38,13 @@ type Server struct {
 	importHandler       *handler.ImportHandler
 	settingsHandler     *handler.SettingsHandler
 	trafficHandler      *handler.TrafficHandler
+	subscriptionHandler *handler.SubscriptionHandler
+	scoresHandler       *handler.ScoresHandler
 	trafficSvc          *service.TrafficService
+	scoringSvc          *service.ScoringService
+	subscriptionSvc     *service.SubscriptionService
 	trafficCancel       context.CancelFunc
+	scoringCancel       context.CancelFunc
 }
 
 // New creates a new Server from the given Config and database.
@@ -78,10 +83,20 @@ func New(cfg Config, db *store.DB) *Server {
 
 	publishSvc := service.NewPublishService(publishStore, configSvc, validator, mihomoClient)
 
+	trafficStore := store.NewTrafficStore(db)
+	notifySvc := service.NewNotifyService()
+	trafficSvc := service.NewTrafficService(trafficStore, mihomoClient, notifySvc)
+
+	// Subscriptions & node exit-IP scoring (wired before handlers: the proxy
+	// handler enqueues scoring work on proxy create/update)
+	subscriptionStore := store.NewSubscriptionStore(db)
+	nodeScoreStore := store.NewNodeScoreStore(db)
+	scoringSvc := service.NewScoringService(nodeScoreStore, proxyStore, proxyGroupStore, subscriptionStore, configStore, settingsStore, nil)
+	subscriptionSvc := service.NewSubscriptionService(subscriptionStore, configStore, trafficStore, nodeScoreStore, proxyGroupStore, mihomoClient, settingsStore, scoringSvc)
+
 	// Handlers
 	authHandler := handler.NewAuthHandler(userStore, authSvc)
-	geoIPSvc := service.NewGeoIPService()
-	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore, geoIPSvc, settingsStore)
+	proxyHandler := handler.NewProxyHandler(proxyStore, proxyGroupStore, scoringSvc, settingsStore)
 	proxyGroupHandler := handler.NewProxyGroupHandler(proxyGroupStore, ruleStore)
 	ruleHandler := handler.NewRuleHandler(ruleStore)
 	ruleProviderHandler := handler.NewRuleProviderHandler(ruleProviderStore, settingsStore, mihomoClient)
@@ -92,10 +107,9 @@ func New(cfg Config, db *store.DB) *Server {
 		configSvc, validator, publishSvc, importSvc,
 	)
 	runtimeHandler := handler.NewRuntimeHandler(mihomoClient)
-	trafficStore := store.NewTrafficStore(db)
-	notifySvc := service.NewNotifyService()
-	trafficSvc := service.NewTrafficService(trafficStore, mihomoClient, notifySvc)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc, trafficStore, notifySvc)
+	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionSvc)
+	scoresHandler := handler.NewScoresHandler(nodeScoreStore, scoringSvc)
 	importHandler := handler.NewImportHandler(
 		importSvc, proxyStore, proxyGroupStore, ruleStore, ruleProviderStore, configStore, settingsStore,
 	)
@@ -116,7 +130,11 @@ func New(cfg Config, db *store.DB) *Server {
 		importHandler:       importHandler,
 		settingsHandler:     settingsHandler,
 		trafficHandler:      trafficHandler,
+		subscriptionHandler: subscriptionHandler,
+		scoresHandler:       scoresHandler,
 		trafficSvc:          trafficSvc,
+		scoringSvc:          scoringSvc,
+		subscriptionSvc:     subscriptionSvc,
 		httpServer: &http.Server{
 			Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 			Handler: middleware.Logging(mux),
@@ -154,91 +172,110 @@ func (s *Server) registerRoutes() {
 
 	// ── Proxies ───────────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/proxies", protected(s.proxyHandler.List))
-	s.mux.Handle("POST /api/proxies", protected(s.proxyHandler.Create))
-	s.mux.Handle("POST /api/proxies/reorder", protected(s.proxyHandler.Reorder))
-	s.mux.Handle("POST /api/proxies/detect-countries", protected(s.proxyHandler.DetectCountries))
+	s.mux.Handle("POST /api/proxies", adminOnly(s.proxyHandler.Create))
+	s.mux.Handle("POST /api/proxies/reorder", adminOnly(s.proxyHandler.Reorder))
 	s.mux.Handle("GET /api/proxies/{id}", protected(s.proxyHandler.Get))
-	s.mux.Handle("PUT /api/proxies/{id}", protected(s.proxyHandler.Update))
-	s.mux.Handle("DELETE /api/proxies/{id}", protected(s.proxyHandler.Delete))
-	s.mux.Handle("POST /api/proxies/{id}/copy", protected(s.proxyHandler.Copy))
+	s.mux.Handle("PUT /api/proxies/{id}", adminOnly(s.proxyHandler.Update))
+	s.mux.Handle("DELETE /api/proxies/{id}", adminOnly(s.proxyHandler.Delete))
+	s.mux.Handle("POST /api/proxies/{id}/copy", adminOnly(s.proxyHandler.Copy))
 	s.mux.Handle("GET /api/proxies/{id}/refs", protected(s.proxyHandler.Refs))
 
 	// ── Proxy Groups ──────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/proxy-groups", protected(s.proxyGroupHandler.List))
-	s.mux.Handle("POST /api/proxy-groups", protected(s.proxyGroupHandler.Create))
-	s.mux.Handle("POST /api/proxy-groups/reorder", protected(s.proxyGroupHandler.Reorder))
+	s.mux.Handle("POST /api/proxy-groups", adminOnly(s.proxyGroupHandler.Create))
+	s.mux.Handle("POST /api/proxy-groups/reorder", adminOnly(s.proxyGroupHandler.Reorder))
 	s.mux.Handle("GET /api/proxy-groups/{id}", protected(s.proxyGroupHandler.Get))
-	s.mux.Handle("PUT /api/proxy-groups/{id}", protected(s.proxyGroupHandler.Update))
-	s.mux.Handle("DELETE /api/proxy-groups/{id}", protected(s.proxyGroupHandler.Delete))
-	s.mux.Handle("POST /api/proxy-groups/{id}/copy", protected(s.proxyGroupHandler.Copy))
+	s.mux.Handle("PUT /api/proxy-groups/{id}", adminOnly(s.proxyGroupHandler.Update))
+	s.mux.Handle("DELETE /api/proxy-groups/{id}", adminOnly(s.proxyGroupHandler.Delete))
+	s.mux.Handle("POST /api/proxy-groups/{id}/copy", adminOnly(s.proxyGroupHandler.Copy))
 	s.mux.Handle("GET /api/proxy-groups/{id}/refs", protected(s.proxyGroupHandler.Refs))
 
 	// ── Rules ─────────────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/rules", protected(s.ruleHandler.List))
-	s.mux.Handle("POST /api/rules", protected(s.ruleHandler.Create))
-	s.mux.Handle("POST /api/rules/reorder", protected(s.ruleHandler.Reorder))
+	s.mux.Handle("POST /api/rules", adminOnly(s.ruleHandler.Create))
+	s.mux.Handle("POST /api/rules/reorder", adminOnly(s.ruleHandler.Reorder))
 	s.mux.Handle("GET /api/rules/{id}", protected(s.ruleHandler.Get))
-	s.mux.Handle("PUT /api/rules/{id}", protected(s.ruleHandler.Update))
-	s.mux.Handle("DELETE /api/rules/{id}", protected(s.ruleHandler.Delete))
+	s.mux.Handle("PUT /api/rules/{id}", adminOnly(s.ruleHandler.Update))
+	s.mux.Handle("DELETE /api/rules/{id}", adminOnly(s.ruleHandler.Delete))
 
 	// ── Rule Providers ────────────────────────────────────────────────────────
 	s.mux.Handle("GET /api/rule-providers", protected(s.ruleProviderHandler.List))
-	s.mux.Handle("POST /api/rule-providers", protected(s.ruleProviderHandler.Create))
+	s.mux.Handle("POST /api/rule-providers", adminOnly(s.ruleProviderHandler.Create))
 	s.mux.Handle("GET /api/rule-providers/{id}", protected(s.ruleProviderHandler.Get))
-	s.mux.Handle("PUT /api/rule-providers/{id}", protected(s.ruleProviderHandler.Update))
-	s.mux.Handle("DELETE /api/rule-providers/{id}", protected(s.ruleProviderHandler.Delete))
-	s.mux.Handle("POST /api/rule-providers/{id}/refresh", protected(s.ruleProviderHandler.Refresh))
+	s.mux.Handle("PUT /api/rule-providers/{id}", adminOnly(s.ruleProviderHandler.Update))
+	s.mux.Handle("DELETE /api/rule-providers/{id}", adminOnly(s.ruleProviderHandler.Delete))
+	s.mux.Handle("POST /api/rule-providers/{id}/refresh", adminOnly(s.ruleProviderHandler.Refresh))
 	s.mux.Handle("GET /api/rule-providers/{id}/content", protected(s.ruleProviderHandler.GetContent))
-	s.mux.Handle("PUT /api/rule-providers/{id}/content", protected(s.ruleProviderHandler.UpdateContent))
+	s.mux.Handle("PUT /api/rule-providers/{id}/content", adminOnly(s.ruleProviderHandler.UpdateContent))
 
 	// ── System Config ─────────────────────────────────────────────────────────
-	s.mux.Handle("GET /api/system-config", protected(s.systemConfigHandler.Get))
-	s.mux.Handle("PUT /api/system-config", protected(s.systemConfigHandler.Update))
+	// Raw system config JSON contains subscription URLs and secrets — admin
+	// only for reads and writes.
+	s.mux.Handle("GET /api/system-config", adminOnly(s.systemConfigHandler.Get))
+	s.mux.Handle("PUT /api/system-config", adminOnly(s.systemConfigHandler.Update))
 
 	// ── Publish ───────────────────────────────────────────────────────────────
-	s.mux.Handle("GET /api/publish/preview", protected(s.publishHandler.Preview))
-	s.mux.Handle("POST /api/publish/validate", protected(s.publishHandler.Validate))
-	s.mux.Handle("POST /api/publish", protected(s.publishHandler.Publish))
-	s.mux.Handle("POST /api/publish/discard", protected(s.publishHandler.Discard))
-	s.mux.Handle("POST /api/publish/rollback", protected(s.publishHandler.Rollback))
-	s.mux.Handle("GET /api/publish/history", protected(s.publishHandler.History))
-	s.mux.Handle("GET /api/publish/history/{id}", protected(s.publishHandler.HistoryDetail))
+	// Preview and history render the full config (provider URLs, secrets) —
+	// admin only. Status and validation stay readable.
+	s.mux.Handle("GET /api/publish/preview", adminOnly(s.publishHandler.Preview))
+	s.mux.Handle("POST /api/publish/validate", adminOnly(s.publishHandler.Validate))
+	s.mux.Handle("POST /api/publish", adminOnly(s.publishHandler.Publish))
+	s.mux.Handle("POST /api/publish/discard", adminOnly(s.publishHandler.Discard))
+	s.mux.Handle("POST /api/publish/rollback", adminOnly(s.publishHandler.Rollback))
+	s.mux.Handle("GET /api/publish/history", adminOnly(s.publishHandler.History))
+	s.mux.Handle("GET /api/publish/history/{id}", adminOnly(s.publishHandler.HistoryDetail))
 	s.mux.Handle("GET /api/publish/status", protected(s.publishHandler.Status))
 
 	// ── Runtime (proxy to mihomo) ─────────────────────────────────────────────
 	s.mux.Handle("GET /api/runtime/connections", protected(s.runtimeHandler.Connections))
-	s.mux.Handle("DELETE /api/runtime/connections/{id}", protected(s.runtimeHandler.CloseConnection))
+	s.mux.Handle("DELETE /api/runtime/connections/{id}", adminOnly(s.runtimeHandler.CloseConnection))
 	s.mux.Handle("GET /api/runtime/proxies", protected(s.runtimeHandler.Proxies))
 	s.mux.Handle("GET /api/runtime/proxies/{name}/delay", protected(s.runtimeHandler.ProxyDelay))
-	s.mux.Handle("PUT /api/runtime/proxies/{group}/selected", protected(s.runtimeHandler.SwitchProxy))
+	s.mux.Handle("PUT /api/runtime/proxies/{group}/selected", adminOnly(s.runtimeHandler.SwitchProxy))
 	s.mux.Handle("GET /api/runtime/rules", protected(s.runtimeHandler.Rules))
 	s.mux.Handle("GET /api/runtime/providers", protected(s.runtimeHandler.Providers))
-	s.mux.Handle("PUT /api/runtime/providers/rules/{name}", protected(s.runtimeHandler.RefreshProvider))
+	s.mux.Handle("PUT /api/runtime/providers/rules/{name}", adminOnly(s.runtimeHandler.RefreshProvider))
 	s.mux.Handle("GET /api/runtime/version", protected(s.runtimeHandler.Version))
 
 	// ── Traffic accounting & alerting ─────────────────────────────────────────
 	s.mux.Handle("GET /api/traffic/summary", protected(s.trafficHandler.Summary))
 	s.mux.Handle("GET /api/traffic/history", protected(s.trafficHandler.History))
 	s.mux.Handle("GET /api/traffic/providers", protected(s.trafficHandler.ListProviders))
-	s.mux.Handle("POST /api/traffic/providers", protected(s.trafficHandler.CreateProvider))
-	s.mux.Handle("PUT /api/traffic/providers/{id}", protected(s.trafficHandler.UpdateProvider))
-	s.mux.Handle("DELETE /api/traffic/providers/{id}", protected(s.trafficHandler.DeleteProvider))
+	s.mux.Handle("POST /api/traffic/providers", adminOnly(s.trafficHandler.CreateProvider))
+	s.mux.Handle("PUT /api/traffic/providers/{id}", adminOnly(s.trafficHandler.UpdateProvider))
+	s.mux.Handle("DELETE /api/traffic/providers/{id}", adminOnly(s.trafficHandler.DeleteProvider))
 	s.mux.Handle("GET /api/traffic/alerts", protected(s.trafficHandler.Alerts))
-	s.mux.Handle("GET /api/traffic/settings", protected(s.trafficHandler.GetSettings))
-	s.mux.Handle("PUT /api/traffic/settings", protected(s.trafficHandler.UpdateSettings))
-	s.mux.Handle("POST /api/traffic/test-notify", protected(s.trafficHandler.TestNotify))
+	s.mux.Handle("GET /api/traffic/settings", adminOnly(s.trafficHandler.GetSettings))
+	s.mux.Handle("PUT /api/traffic/settings", adminOnly(s.trafficHandler.UpdateSettings))
+	s.mux.Handle("POST /api/traffic/test-notify", adminOnly(s.trafficHandler.TestNotify))
+
+	// ── Subscriptions & node scores ───────────────────────────────────────────
+	s.mux.Handle("GET /api/subscriptions", protected(s.subscriptionHandler.List))
+	s.mux.Handle("POST /api/subscriptions", adminOnly(s.subscriptionHandler.Create))
+	s.mux.Handle("GET /api/subscriptions/providers", protected(s.subscriptionHandler.Discover))
+	s.mux.Handle("GET /api/subscriptions/{id}", protected(s.subscriptionHandler.Get))
+	s.mux.Handle("PUT /api/subscriptions/{id}", adminOnly(s.subscriptionHandler.Update))
+	s.mux.Handle("DELETE /api/subscriptions/{id}", adminOnly(s.subscriptionHandler.Delete))
+	s.mux.Handle("POST /api/subscriptions/{id}/refresh", adminOnly(s.subscriptionHandler.Refresh))
+
+	s.mux.Handle("GET /api/node-scores", protected(s.scoresHandler.List))
+	s.mux.Handle("POST /api/node-scores/refresh", adminOnly(s.scoresHandler.RefreshBatch))
+	s.mux.Handle("GET /api/node-scores/{id}", protected(s.scoresHandler.Get))
+	s.mux.Handle("POST /api/node-scores/{id}/refresh", adminOnly(s.scoresHandler.RefreshOne))
 
 	// ── Import ────────────────────────────────────────────────────────────────
-	s.mux.Handle("POST /api/import/config", protected(s.importHandler.Import))
+	s.mux.Handle("POST /api/import/config", adminOnly(s.importHandler.Import))
 
 	// ── Settings ──────────────────────────────────────────────────────────────
-	s.mux.Handle("GET /api/settings", protected(s.settingsHandler.GetSettings))
-	s.mux.Handle("PUT /api/settings", protected(s.settingsHandler.UpdateSettings))
+	// App settings carry the controller secret and isolation underlay —
+	// admin only. Raw config YAML editor likewise.
+	s.mux.Handle("GET /api/settings", adminOnly(s.settingsHandler.GetSettings))
+	s.mux.Handle("PUT /api/settings", adminOnly(s.settingsHandler.UpdateSettings))
 
 	// Config YAML editor
-	s.mux.Handle("GET /api/settings/config-yaml", protected(s.settingsHandler.GetConfigYAML))
-	s.mux.Handle("PUT /api/settings/config-yaml", protected(s.settingsHandler.UpdateConfigYAML))
-	s.mux.Handle("DELETE /api/settings/config-yaml", protected(s.settingsHandler.DeleteConfigYAML))
+	s.mux.Handle("GET /api/settings/config-yaml", adminOnly(s.settingsHandler.GetConfigYAML))
+	s.mux.Handle("PUT /api/settings/config-yaml", adminOnly(s.settingsHandler.UpdateConfigYAML))
+	s.mux.Handle("DELETE /api/settings/config-yaml", adminOnly(s.settingsHandler.DeleteConfigYAML))
 
 	// User management — admin only
 	s.mux.Handle("GET /api/settings/users", adminOnly(s.settingsHandler.ListUsers))
@@ -281,6 +318,11 @@ func (s *Server) Start() error {
 	s.trafficCancel = cancel
 	go s.trafficSvc.Run(ctx)
 
+	scoringCtx, scoringCancel := context.WithCancel(context.Background())
+	s.scoringCancel = scoringCancel
+	go s.scoringSvc.Run(scoringCtx)
+	go s.subscriptionSvc.Run(scoringCtx)
+
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -291,6 +333,9 @@ func (s *Server) Start() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.trafficCancel != nil {
 		s.trafficCancel()
+	}
+	if s.scoringCancel != nil {
+		s.scoringCancel()
 	}
 	return s.httpServer.Shutdown(ctx)
 }

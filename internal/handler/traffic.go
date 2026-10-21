@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/gejiliang/mihomo-cp/internal/middleware"
 	"github.com/gejiliang/mihomo-cp/internal/model"
 	"github.com/gejiliang/mihomo-cp/internal/service"
 	"github.com/gejiliang/mihomo-cp/internal/store"
@@ -32,6 +33,13 @@ func (h *TrafficHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		Error(w, 500, "internal", err.Error())
 		return
 	}
+	if middleware.GetRole(r.Context()) != "admin" {
+		for i := range summary.Providers {
+			if summary.Providers[i].Provider.SubscriptionURL != "" {
+				summary.Providers[i].Provider.SubscriptionURL = service.MaskURL(summary.Providers[i].Provider.SubscriptionURL)
+			}
+		}
+	}
 	JSON(w, 200, summary)
 }
 
@@ -51,12 +59,26 @@ func (h *TrafficHandler) History(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, history)
 }
 
+// maskSubscriptionURLs masks provider subscription URLs for non-admin
+// readers. The full URL is the vendor credential — only admins (who edit the
+// source) see it.
+func maskSubscriptionURLs(providers []model.TrafficProvider) {
+	for i := range providers {
+		if providers[i].SubscriptionURL != "" {
+			providers[i].SubscriptionURL = service.MaskURL(providers[i].SubscriptionURL)
+		}
+	}
+}
+
 // ListProviders handles GET /api/traffic/providers
 func (h *TrafficHandler) ListProviders(w http.ResponseWriter, r *http.Request) {
 	providers, err := h.store.ListProviders()
 	if err != nil {
 		Error(w, 500, "internal", err.Error())
 		return
+	}
+	if middleware.GetRole(r.Context()) != "admin" {
+		maskSubscriptionURLs(providers)
 	}
 	JSON(w, 200, providers)
 }
@@ -65,6 +87,9 @@ type providerRequest struct {
 	Name            string   `json:"name"`
 	QuotaBytes      int64    `json:"quota_bytes"`
 	ResetDay        int      `json:"reset_day"`
+	ResetHour       int      `json:"reset_hour"`
+	ResetMinute     int      `json:"reset_minute"`
+	ResetTimezone   string   `json:"reset_timezone"` // IANA name, "" = server local
 	NodePatterns    []string `json:"node_patterns"`
 	SubscriptionURL string   `json:"subscription_url"`
 	Enabled         *bool    `json:"enabled"`
@@ -79,6 +104,10 @@ func (req *providerRequest) validate() string {
 	}
 	if req.ResetDay < 1 || req.ResetDay > 31 {
 		return "reset_day must be between 1 and 31"
+	}
+	policy := service.ResetPolicy{Day: req.ResetDay, Hour: req.ResetHour, Minute: req.ResetMinute, Timezone: req.ResetTimezone}
+	if _, err := policy.Normalize(); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -103,6 +132,9 @@ func (h *TrafficHandler) CreateProvider(w http.ResponseWriter, r *http.Request) 
 		Name:            strings.TrimSpace(req.Name),
 		QuotaBytes:      req.QuotaBytes,
 		ResetDay:        req.ResetDay,
+		ResetHour:       req.ResetHour,
+		ResetMinute:     req.ResetMinute,
+		ResetTimezone:   strings.TrimSpace(req.ResetTimezone),
 		NodePatternList: req.NodePatterns,
 		SubscriptionURL: strings.TrimSpace(req.SubscriptionURL),
 		Enabled:         enabled,
@@ -137,6 +169,9 @@ func (h *TrafficHandler) UpdateProvider(w http.ResponseWriter, r *http.Request) 
 	p.Name = strings.TrimSpace(req.Name)
 	p.QuotaBytes = req.QuotaBytes
 	p.ResetDay = req.ResetDay
+	p.ResetHour = req.ResetHour
+	p.ResetMinute = req.ResetMinute
+	p.ResetTimezone = strings.TrimSpace(req.ResetTimezone)
 	p.NodePatternList = req.NodePatterns
 	p.SubscriptionURL = strings.TrimSpace(req.SubscriptionURL)
 	if req.Enabled != nil {

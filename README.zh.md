@@ -14,7 +14,9 @@
 - **发布中心** — 差异预览、校验（结构化检查 + mihomo 二进制验证）、发布、取消更改、回滚、带日期前缀的版本历史（如 `20260324-1`）
 - **总览仪表盘** — 活跃连接列表（支持关闭/快捷添加规则，自动刷新），代理节点延迟并发批量测试
 - **运行状态监控** — 实时连接查看/搜索/关闭，策略组延迟测试与切换，运行中的规则/规则集，支持从连接快捷添加规则
-- **流量统计与配额告警** — 按供应商跟踪每月流量配额：本地按节点统计（轮询 `/connections` 将增量归属到实际出口节点）、可选读取订阅 `subscription-userinfo` 头的供应商侧真实用量、支持自定义每月刷新日的计费周期、每日流量图表、阈值告警（每周期每阈值只发一次，支持 Bark / ntfy / webhook）
+- **流量统计与配额告警** — 按供应商跟踪每月流量配额：本地按节点统计（轮询 `/connections` 将增量归属到实际出口节点）、可选读取订阅 `subscription-userinfo` 头的供应商侧真实用量、计费周期支持刷新日 + 时分 + IANA 时区（如每月 10 日 12:00 Asia/Shanghai）、每日流量图表、阈值告警（每周期每阈值只发一次，支持 Bark / ntfy / webhook）
+- **订阅管理** — 原生 `proxy-providers` 订阅的增删改与刷新：供应商上报用量、到期时间与配额人工补充、精确重置时刻（日/时/分 + IANA 时区）、剩余流量按 0 截断、未知不伪装成 0、仅写 draft 并沿既有 Publish Center 流程生效、订阅 URL 全程掩码不出服务端
+- **节点出口 IP 评分** — 通过一次性隔离 mihomo 实例做真实完整出口测试（仅绑 loopback、无 TUN/DNS 劫持、运营者配置物理 underlay 接口与显式 DNS），调用 [Net.Coffee](https://ip.net.coffee) 公开接口：Claude 信任分（0–100，越高越可信；第三方公开评分，非 Anthropic 官方风险分）与综合 IP 情报（ASN、国家、住宅/机房、VPN/代理/Tor/滥用标记）。两个数据源独立校验响应 IP（精确 / 同网段 / 不匹配），按实际出口 IP 去重评分，7 天自动刷新、队列持久化可重启恢复、退避与 Retry-After 处理，支持手动单个/批量刷新
 - **中英文切换** — 右上角下拉菜单一键切换语言
 - **认证与权限** — JWT 登录，admin/readonly 角色，用户管理，修改密码
 - **单文件部署** — 前端通过 `embed.FS` 嵌入，无需单独的 Web 服务器
@@ -147,7 +149,19 @@ web/
 | DELETE | `/settings/config-yaml`           | 清除配置 YAML 草稿        |
 | GET    | `/settings/users`                 | 用户列表（仅管理员）      |
 | POST   | `/settings/users`                 | 创建用户（仅管理员）      |
+| GET    | `/subscriptions`                  | 订阅列表（含状态） |
+| POST   | `/subscriptions`                  | 创建订阅（写 draft；仅管理员） |
+| GET    | `/subscriptions/providers`        | 可关联的原生 provider 列表 |
+| GET    | `/subscriptions/{id}`             | 订阅详情 |
+| PUT    | `/subscriptions/{id}`             | 更新订阅（写 draft；仅管理员） |
+| DELETE | `/subscriptions/{id}`             | 删除订阅（组引用时 409 并返回引用；仅管理员） |
+| POST   | `/subscriptions/{id}/refresh`     | 刷新订阅用量与节点（仅管理员） |
+| GET    | `/node-scores`                    | 节点出口 IP 评分与队列状态 |
+| GET    | `/node-scores/{id}`               | 单节点评分（id 需 URL 编码） |
+| POST   | `/node-scores/{id}/refresh`       | 重新评分单个节点（仅管理员） |
+| POST   | `/node-scores/refresh`            | 批量重新评分 `{ids}` 或 `{all}`（仅管理员） |
 
+订阅与评分的完整接口契约见 [docs/subscription-score-api.md](docs/subscription-score-api.md)，含出口隔离设置（`isolation_interface`、`isolation_dns`）说明。
 ## 许可证
 
 MIT
