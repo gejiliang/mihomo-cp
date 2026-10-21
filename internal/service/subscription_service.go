@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,6 +44,13 @@ type SubscriptionService struct {
 	settings *store.SettingsStore
 	scorer   *ScoringService
 	http     *http.Client
+
+	// mutateMu serializes config+metadata mutations (Create/Update/Delete) so
+	// a draft read-modify-write can never lose another mutation's entry and a
+	// losing create cannot overwrite a winner's provider URL before the DB
+	// unique index rejects it. Validations run under the lock before any
+	// mutation; a DB failure rolls the draft side effect back.
+	mutateMu sync.Mutex
 
 	nowFn func() time.Time
 }
@@ -461,6 +469,40 @@ func (s *SubscriptionService) findProviderEntry(name string) (providerEntry, err
 	return parseProviderEntry(name, raw), nil
 }
 
+// draftEntrySnapshot captures one provider entry so a failed DB write can
+// restore the draft exactly (entry present with its original JSON, or absent).
+type draftEntrySnapshot struct {
+	existed bool
+	raw     map[string]any
+}
+
+func (s *SubscriptionService) snapshotDraftProvider(name string) draftEntrySnapshot {
+	cfg, err := s.draftConfig()
+	if err != nil {
+		return draftEntrySnapshot{}
+	}
+	raw, ok := draftProviders(cfg)[name].(map[string]any)
+	if !ok {
+		return draftEntrySnapshot{}
+	}
+	return draftEntrySnapshot{existed: true, raw: raw}
+}
+
+// restoreDraftProvider returns the entry to its pre-mutation state. Unrelated
+// settings and entries are untouched.
+func (s *SubscriptionService) restoreDraftProvider(name string, snap draftEntrySnapshot) error {
+	if !snap.existed {
+		_, err := s.removeDraftProvider(name)
+		return err
+	}
+	cfg, err := s.draftConfig()
+	if err != nil {
+		return err
+	}
+	draftProviders(cfg)[name] = snap.raw
+	return s.saveDraft(cfg)
+}
+
 // upsertDraftProvider writes/updates the native provider entry for a
 // subscription. Only the provider entry is touched — never vendor rules,
 // DNS, or global settings.
@@ -611,6 +653,13 @@ func validateReset(sub *model.Subscription) error {
 // entry in the draft. Existing providers are linked, never duplicated. A
 // custom provider_name different from the subscription name is honored.
 func (s *SubscriptionService) Create(req *SubscriptionRequest) (*SubscriptionView, bool, error) {
+	// Serialize config+metadata mutations: one read-modify-write of the draft
+	// and one metadata insert, atomically enough that a losing create can
+	// neither clobber a winner's URL nor leave draft side effects behind.
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+
+	// ── validation, all before any mutation ──
 	if req.Name == nil || strings.TrimSpace(*req.Name) == "" {
 		return nil, false, fmt.Errorf("name is required")
 	}
@@ -628,6 +677,11 @@ func (s *SubscriptionService) Create(req *SubscriptionRequest) (*SubscriptionVie
 	if err := validateReset(sub); err != nil {
 		return nil, false, err
 	}
+	if sub.TrafficProviderID != "" {
+		if _, err := s.traffic.GetProvider(sub.TrafficProviderID); err != nil {
+			return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
+		}
+	}
 	if _, err := s.subs.GetByName(sub.Name); err == nil {
 		return nil, false, &ErrConflict{fmt.Sprintf("subscription %q already exists", sub.Name)}
 	}
@@ -635,36 +689,43 @@ func (s *SubscriptionService) Create(req *SubscriptionRequest) (*SubscriptionVie
 		return nil, false, &ErrConflict{fmt.Sprintf("provider %q is already managed by subscription %q; a provider cannot be shared", sub.ProviderName, other.Name)}
 	}
 
-	draftChanged := false
-	if _, exists := s.findProviderEntry(sub.ProviderName); exists == nil {
-		// Linking an existing native provider — do not touch its config.
-		sub.ProviderSource = "linked"
+	var entryURL string
+	if entry, err := s.findProviderEntry(sub.ProviderName); err == nil {
+		entryURL = entry.URL
 		if req.URL != nil && strings.TrimSpace(*req.URL) != "" {
-			return nil, false, fmt.Errorf("provider %q already exists; omit url to link it", sub.ProviderName)
+			return nil, false, &ErrConflict{fmt.Sprintf("provider %q is already managed or configured; omit url to link it, or pick another name", sub.ProviderName)}
+		}
+		sub.ProviderSource = "linked"
+		if sub.TrafficProviderID == "" && entryURL != "" {
+			// Auto-link a traffic provider that tracks the same subscription URL.
+			if tp, err := s.traffic.GetProvider(s.trafficProviderIDByURL(entryURL)); err == nil {
+				sub.TrafficProviderID = tp.ID
+			}
 		}
 	} else {
 		if req.URL == nil || strings.TrimSpace(*req.URL) == "" {
 			return nil, false, fmt.Errorf("url is required when creating a new subscription provider")
 		}
+	}
+
+	// ── mutation: draft first (rollback-able), then metadata ──
+	draftChanged := false
+	var snap draftEntrySnapshot
+	if sub.ProviderSource == "created" {
+		snap = s.snapshotDraftProvider(sub.ProviderName)
 		changed, err := s.upsertDraftProvider(sub.ProviderName, strings.TrimSpace(*req.URL))
 		if err != nil {
 			return nil, false, err
 		}
-		draftChanged = draftChanged || changed
-	}
-
-	if sub.TrafficProviderID != "" {
-		if _, err := s.traffic.GetProvider(sub.TrafficProviderID); err != nil {
-			return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
-		}
-	} else if entry, err := s.findProviderEntry(sub.ProviderName); err == nil && entry.URL != "" {
-		// Auto-link a traffic provider that tracks the same subscription URL.
-		if tp, err := s.traffic.GetProvider(s.trafficProviderIDByURL(entry.URL)); err == nil {
-			sub.TrafficProviderID = tp.ID
-		}
+		draftChanged = changed
 	}
 
 	if err := s.subs.Create(sub); err != nil {
+		if draftChanged {
+			if rerr := s.restoreDraftProvider(sub.ProviderName, snap); rerr != nil {
+				slog.Error("subscription: draft rollback after failed create failed", "provider", sub.ProviderName, "err", rerr)
+			}
+		}
 		return nil, draftChanged, err
 	}
 	if s.scorer != nil {
@@ -693,6 +754,10 @@ func (s *SubscriptionService) trafficProviderIDByURL(rawURL string) string {
 // Update mutates metadata; nil fields keep stored values, an empty url keeps
 // the stored secret. Provider rebinding requires the new provider to exist.
 func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*SubscriptionView, bool, error) {
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+
+	// ── validation, all before any mutation ──
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, false, err
@@ -722,23 +787,30 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 		}
 		sub.ProviderSource = "linked"
 	}
-
-	draftChanged := false
-	if req.URL != nil && strings.TrimSpace(*req.URL) != "" && sub.ProviderName != "" {
-		changed, err := s.upsertDraftProvider(sub.ProviderName, strings.TrimSpace(*req.URL))
-		if err != nil {
-			return nil, false, err
-		}
-		draftChanged = draftChanged || changed
-	}
-
 	if sub.TrafficProviderID != "" {
 		if _, err := s.traffic.GetProvider(sub.TrafficProviderID); err != nil {
 			return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
 		}
 	}
 
+	// ── mutation: draft first (rollback-able), then metadata ──
+	draftChanged := false
+	var snap draftEntrySnapshot
+	if req.URL != nil && strings.TrimSpace(*req.URL) != "" && sub.ProviderName != "" {
+		snap = s.snapshotDraftProvider(sub.ProviderName)
+		changed, err := s.upsertDraftProvider(sub.ProviderName, strings.TrimSpace(*req.URL))
+		if err != nil {
+			return nil, false, err
+		}
+		draftChanged = changed
+	}
+
 	if err := s.subs.Update(sub); err != nil {
+		if draftChanged {
+			if rerr := s.restoreDraftProvider(sub.ProviderName, snap); rerr != nil {
+				slog.Error("subscription: draft rollback after failed update failed", "provider", sub.ProviderName, "err", rerr)
+			}
+		}
 		return nil, draftChanged, err
 	}
 	v, err := s.View(sub)
@@ -751,6 +823,9 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 // Shared traffic-provider accounting is not touched. Business groups are
 // never rewritten here.
 func (s *SubscriptionService) Delete(id string) (map[string]any, error) {
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, err
@@ -764,13 +839,9 @@ func (s *SubscriptionService) Delete(id string) (map[string]any, error) {
 			return nil, &ErrReferenced{References: refs}
 		}
 	}
-	removedFromDraft := false
-	if sub.ProviderName != "" {
-		removedFromDraft, err = s.removeDraftProvider(sub.ProviderName)
-		if err != nil {
-			return nil, err
-		}
-	}
+
+	// Metadata first; if anything later fails the provider stays in the draft
+	// (never silently removed while its manager row is gone).
 	if sub.ProviderName != "" {
 		if err := s.scores.DeleteByProvider(sub.ProviderName); err != nil {
 			return nil, err
@@ -778,6 +849,21 @@ func (s *SubscriptionService) Delete(id string) (map[string]any, error) {
 	}
 	if err := s.subs.Delete(sub.ID); err != nil {
 		return nil, err
+	}
+	removedFromDraft := false
+	if sub.ProviderName != "" {
+		removedFromDraft, err = s.removeDraftProvider(sub.ProviderName)
+		if err != nil {
+			// The row is gone but the draft entry removal failed: surface it
+			// instead of silently widening the change.
+			return map[string]any{
+				"status":                      "deleted",
+				"provider_name":               sub.ProviderName,
+				"provider_removed_from_draft": false,
+				"draft_changed":               false,
+				"warning":                     "subscription deleted but provider entry removal from draft failed: " + err.Error(),
+			}, nil
+		}
 	}
 	if s.scorer != nil {
 		s.scorer.InvalidateProviderCache()
