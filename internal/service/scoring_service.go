@@ -631,7 +631,7 @@ func (s *ScoringService) pinGroupSelections(topo *IsolationTopology) error {
 			continue
 		}
 		switch gtype {
-		case "selector", "fallback", "url-test":
+		case "select", "fallback", "url-test":
 			now, err := mc.GetProxyNow(name)
 			if err != nil {
 				return fmt.Errorf("resolve current selection of group %q: %w", name, err)
@@ -639,9 +639,11 @@ func (s *ScoringService) pinGroupSelections(topo *IsolationTopology) error {
 			if now == "" {
 				return fmt.Errorf("group %q has no current selection", name)
 			}
-			// Materialize as an immutable single-member select: exactly the
-			// member production currently uses, nothing else to switch to.
-			g["type"] = "selector"
+			// Materialize as an immutable single-member group of the legal
+			// mihomo type "select": exactly the member production currently
+			// uses, nothing else to switch to (a reordered url-test/fallback
+			// would NOT pin — child health checks may switch).
+			g["type"] = "select"
 			g["proxies"] = []string{now}
 			// The selected member's own chain (nested group or dialer-proxy
 			// dependencies) is already materialized by ResolveDialerDeps /

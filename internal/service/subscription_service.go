@@ -112,20 +112,24 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 			continue
 		}
 		fetchURL := entry.URL
+		// Network fetch OUTSIDE the mutation lock.
 		info, err := s.fetchUserinfo(fetchURL)
 		if err != nil {
 			slog.Debug("subscription: auto userinfo refresh failed", "subscription", sub.Name, "err", err)
 			continue // keep last success; do not mark error for background polls
 		}
-		// Re-read and persist snapshot fields only; drop results fetched from
-		// a URL that is no longer current for the row's provider.
+		// Short critical section: source re-validation (atomic against
+		// provider/URL rebind) + REAL field-specific snapshot persist.
+		s.mutateMu.Lock()
 		fresh, gerr := s.subs.Get(sub.ID)
 		if gerr != nil {
+			s.mutateMu.Unlock()
 			continue
 		}
 		cur, cerr := s.findProviderEntry(fresh.ProviderName)
 		if cerr != nil || cur.URL != fetchURL {
-			continue
+			s.mutateMu.Unlock()
+			continue // URL/provider rebound mid-flight: drop the stale-source result
 		}
 		now := s.nowFn()
 		fresh.UserinfoUpload = info.Upload
@@ -136,9 +140,10 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 		fresh.UserinfoFetchedAt = model.NewNullTime(now)
 		fresh.LastSuccessAt = model.NewNullTime(now)
 		fresh.LastRefreshError = ""
-		if err := s.subs.Update(fresh); err != nil {
+		if err := s.subs.UpdateSnapshot(fresh); err != nil {
 			slog.Warn("subscription: auto userinfo persist failed", "subscription", sub.Name, "err", err)
 		}
+		s.mutateMu.Unlock()
 	}
 }
 
@@ -805,7 +810,7 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 		draftChanged = changed
 	}
 
-	if err := s.subs.Update(sub); err != nil {
+	if err := s.subs.UpdateMetadata(sub); err != nil {
 		if draftChanged {
 			if rerr := s.restoreDraftProvider(sub.ProviderName, snap); rerr != nil {
 				slog.Error("subscription: draft rollback after failed update failed", "provider", sub.ProviderName, "err", rerr)
@@ -940,9 +945,14 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 		}
 	}
 
-	// Re-read the row: concurrent metadata edits must survive this refresh.
+	// Short critical section AFTER the network calls: re-validate the source
+	// atomically against provider/URL rebind (metadata mutations hold the same
+	// lock), then persist ONLY snapshot/status columns via SQL field-specific
+	// updates — concurrent metadata edits are structurally unaffected.
+	s.mutateMu.Lock()
 	fresh, rerr := s.subs.Get(id)
 	if rerr != nil {
+		s.mutateMu.Unlock()
 		return nil, &RefreshError{Code: "internal", Message: rerr.Error()}
 	}
 	fresh.LastRefreshAt = model.NewNullTime(now)
@@ -977,9 +987,11 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 	} else {
 		fresh.LastRefreshError = refErr.Message
 	}
-	if err := s.subs.Update(fresh); err != nil {
+	if err := s.subs.UpdateSnapshot(fresh); err != nil {
+		s.mutateMu.Unlock()
 		return nil, &RefreshError{Code: "internal", Message: err.Error()}
 	}
+	s.mutateMu.Unlock()
 
 	if s.scorer != nil {
 		s.scorer.InvalidateProviderCache()

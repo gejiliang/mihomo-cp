@@ -93,24 +93,46 @@ func (s *SubscriptionStore) Create(sub *model.Subscription) error {
 	return nil
 }
 
-// Update persists mutable fields of an existing subscription row.
-func (s *SubscriptionStore) Update(sub *model.Subscription) error {
+// UpdateMetadata persists ONLY metadata fields (name, enabled, provider
+// binding, reset policy, manual supplements, traffic link). It never writes
+// snapshot/status columns, so a concurrent refresh's fresh vendor snapshot
+// cannot be clobbered by a metadata save.
+func (s *SubscriptionStore) UpdateMetadata(sub *model.Subscription) error {
 	sub.UpdatedAt = time.Now().UTC()
 	res, err := s.db.Exec(
 		`UPDATE subscriptions SET
 			name = ?, enabled = ?, provider_name = ?, quota_bytes = ?, manual_expire = ?,
-			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?,
-			userinfo_upload = ?, userinfo_download = ?, userinfo_total = ?, userinfo_expire = ?, userinfo_counters = ?, userinfo_fetched_at = ?,
-			last_refresh_at = ?, last_success_at = ?, last_refresh_error = ?, last_provider_update = ?, updated_at = ?
+			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?, updated_at = ?
 		WHERE id = ?`,
 		sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
 		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource,
-		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
-		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
 		sub.UpdatedAt, sub.ID,
 	)
 	if err != nil {
-		return fmt.Errorf("update subscription: %w", err)
+		return fmt.Errorf("update subscription metadata: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateSnapshot persists ONLY the vendor snapshot and refresh-status columns.
+// Metadata columns are untouched, so a snapshot write can never overwrite
+// concurrent name/enabled/reset edits. The row's current metadata (including
+// provider binding) is read separately for source validation.
+func (s *SubscriptionStore) UpdateSnapshot(sub *model.Subscription) error {
+	res, err := s.db.Exec(
+		`UPDATE subscriptions SET
+			userinfo_upload = ?, userinfo_download = ?, userinfo_total = ?, userinfo_expire = ?, userinfo_counters = ?, userinfo_fetched_at = ?,
+			last_refresh_at = ?, last_success_at = ?, last_refresh_error = ?, last_provider_update = ?, updated_at = ?
+		WHERE id = ?`,
+		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
+		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
+		time.Now().UTC(), sub.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update subscription snapshot: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
