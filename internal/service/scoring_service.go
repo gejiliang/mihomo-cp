@@ -181,9 +181,16 @@ func (s *ScoringService) disabledProviders() map[string]bool {
 
 // ScanAndEnqueue reconciles the queue with current inventory: static proxies
 // from the DB and effective provider nodes (cache + override) from the draft
-// config. Changed fingerprints re-queue promptly while preserving the row's
-// success history; removed nodes are pruned.
+// config. It always loads a FRESH provider snapshot (generation bumped at the
+// start), so cache files auto-updated by mihomo on disk are picked up without
+// manual invalidation or restart; within one round the snapshot is shared
+// across all nodes of a provider (one read per provider per round).
+// Changed fingerprints re-queue promptly while preserving the row's success
+// history; removed nodes are pruned.
 func (s *ScoringService) ScanAndEnqueue() {
+	s.mu.Lock()
+	s.provGen++
+	s.mu.Unlock()
 	disabled := s.disabledProviders()
 
 	// ── static proxies ──────────────────────────────────────────────────
@@ -882,60 +889,63 @@ func (s *ScoringService) isolationConfig() IsolationConfig {
 	return isolationSettings(st)
 }
 
-// underlayInterface enforces the deployment-critical isolation guard:
-// when the managed config enables TUN or fake-ip DNS, an unbound child
-// socket would be captured by the production tunnel or resolve fake IPs, so
-// an explicit interface is required. Empty configured values fall back to a
-// physical interface suffix explicitly configured in the managed config
-// ("…#<iface>" in nameservers) — accepted only if that interface exists.
-// Otherwise the probe is refused until the operator sets isolation_interface
-// via the settings API. No deployment-specific names live in this code.
+// underlayInterface enforces the deployment-critical isolation guard. The
+// managed draft saying "no TUN / no fake-ip" is NOT proof that the production
+// instance is not tunneling (it may run other config), so an unbound child
+// socket is never allowed:
+//
+//   - an explicitly configured isolation_interface is accepted only if the
+//     interface exists, is up and is NOT loopback;
+//   - an empty setting falls back to a physical interface explicitly
+//     configured in the managed config ("…#<iface>" nameserver suffix),
+//     accepted only when every suffixed entry agrees and the interface
+//     passes the same checks;
+//   - no verified interface, or an unreadable/corrupt managed draft (fail
+//     closed) → error; the probe is refused (config_missing) until the
+//     operator sets the underlay via the settings API.
+//
+// No deployment-specific names live in this code.
 func (s *ScoringService) underlayInterface(configured string) (string, error) {
+	refuse := func(reason string) (string, error) {
+		return "", fmt.Errorf("isolation_interface is not usable (%s): refusing an unbound isolated probe; "+
+			"set the physical underlay interface in Settings (isolation_interface)", reason)
+	}
 	if configured != "" {
+		if !usableNonLoopbackInterface(configured) {
+			return refuse("configured interface " + configured + " missing, down or loopback")
+		}
 		return configured, nil
 	}
 	draft, err := s.configs.Get()
 	if err != nil {
-		return "", fmt.Errorf("read managed config for isolation guard: %w", err)
+		return refuse("cannot read managed config")
 	}
 	var cfg map[string]json.RawMessage
-	if json.Unmarshal(draft, &cfg) != nil {
-		return "", nil
-	}
-	if !needsUnderlayBinding(cfg) {
-		return "", nil // no TUN/fake-ip in the managed config: unbound is safe
+	if err := json.Unmarshal(draft, &cfg); err != nil {
+		// Corrupt draft must fail closed, never open.
+		return refuse("managed config unreadable")
 	}
 	suffix := deriveIfaceSuffix(cfg)
-	if suffix != "" {
-		if _, err := net.InterfaceByName(suffix); err == nil {
-			return suffix, nil
-		}
+	if suffix == "" {
+		return refuse("no configured interface and no verifiable #<iface> suffix in managed config nameservers")
 	}
-	return "", fmt.Errorf(
-		"isolation_interface is not configured and the managed config enables TUN/fake-ip: " +
-			"refusing to run an unbound isolated probe; set the physical underlay interface in Settings")
+	if !usableNonLoopbackInterface(suffix) {
+		return refuse("derived interface " + suffix + " missing, down or loopback")
+	}
+	return suffix, nil
 }
 
-// needsUnderlayBinding reports whether the managed config routes traffic
-// through TUN or fake-ip DNS, which would capture an unbound child socket.
-func needsUnderlayBinding(cfg map[string]json.RawMessage) bool {
-	var tun struct {
-		Enable any `json:"enable"`
+// usableNonLoopbackInterface reports whether the named interface exists, is
+// up, and is not loopback — the minimum for a physical underlay binding.
+func usableNonLoopbackInterface(name string) bool {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return false
 	}
-	if raw, ok := cfg["tun"]; ok && json.Unmarshal(raw, &tun) == nil {
-		if b, ok := tun.Enable.(bool); ok && b {
-			return true
-		}
+	if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+		return false
 	}
-	var dns struct {
-		EnhancedMode string `json:"enhanced-mode"`
-	}
-	if raw, ok := cfg["dns"]; ok && json.Unmarshal(raw, &dns) == nil {
-		if dns.EnhancedMode == "fake-ip" {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
 // deriveIfaceSuffix scans the managed config's nameserver entries for an

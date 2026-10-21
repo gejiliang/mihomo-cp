@@ -314,14 +314,15 @@ semantics: empty value keeps the stored setting):
 
 | Field | Meaning |
 |---|---|
-| `isolation_interface` | Physical underlay interface the isolated instance binds its sockets to (mihomo `interface-name`). Required when the managed config enables TUN or fake-ip DNS — the scheduler **refuses** to probe unbound (`config_missing`) instead of silently running through the production tunnel. |
+| `isolation_interface` | **Required.** Physical underlay interface the isolated instance binds its sockets to (mihomo `interface-name`). Accepted only when the interface exists, is up and is NOT loopback. The managed draft saying "TUN off / no fake-ip" is never treated as proof of a tunnel-free host, so an unbound probe is always refused with `config_missing` — regardless of draft flags. |
 | `isolation_dns` | Comma-separated explicit DNS upstreams (mihomo nameserver syntax) for the isolated instance. Empty = public DoH-by-IP defaults; the host system resolver (possibly fake-ip hijacked) is never relied upon. |
 
-When `isolation_interface` is empty but every explicitly configured
-nameserver in the managed config carries the same physical-interface suffix
-(`…#<iface>`), that interface is derived and used after verifying it exists.
-Deployment-specific values are set by the operator via the API; none are
-hardcoded in code, tests, or docs.
+When `isolation_interface` is empty, the guard falls back to a physical
+interface explicitly configured in the managed config (`…#<iface>` nameserver
+suffix) — accepted only when every suffixed entry agrees on the same interface
+and that interface passes the existence/up/non-loopback checks. An unreadable
+or corrupt managed draft fails closed. Deployment-specific values are set by
+the operator via the API; none are hardcoded in code, tests, or docs.
 
 ## Examples (fixtures-safe)
 

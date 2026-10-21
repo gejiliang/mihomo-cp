@@ -130,7 +130,7 @@ func (c *NetCoffeeClient) FetchClaudeTrust(ctx context.Context, ip string) (*Cla
 	risk := &ClaudeTrustRisk{
 		QueryIP:        ip,
 		ResponseIP:     raw.IP,
-		IPMatch:        IPMatchScope(ip, raw.IP),
+		IPMatch:        IPMatchScope(ip, raw.IP, raw.CIDR),
 		CIDR:           raw.CIDR,
 		ASNOrg:         raw.ASNOrg,
 		Country:        raw.Country,
@@ -180,7 +180,8 @@ func (c *NetCoffeeClient) FetchIPLookup(ctx context.Context, ip string) (json.Ra
 		return nil, model.IPMatchUnknown, fmt.Errorf("lookup: unparsable response: %w", err)
 	}
 	responseIP := jsonString(raw["ip"])
-	match := IPMatchScope(ip, responseIP)
+	declaredCIDR := jsonString(raw["cidr"])
+	match := IPMatchScope(ip, responseIP, declaredCIDR)
 
 	// Keep only the documented public fields the GUI displays; drop bulky
 	// secondary lists (related_domains, histories) to bound storage.
@@ -271,26 +272,29 @@ func sanitizeURLError(what string, err error) error {
 // IPMatchScope validates a response IP against the queried IP. A response
 // naming a different host in the same /24 (IPv4) or /64 (IPv6) is recorded
 // as CIDR-level data — never presented as a precise single-IP score.
-func IPMatchScope(queryIP, responseIP string) string {
+func IPMatchScope(queryIP, responseIP, declaredCIDR string) string {
 	if responseIP == "" {
 		return model.IPMatchUnknown
-	}
-	if responseIP == queryIP {
-		return model.IPMatchExact
 	}
 	q, r := net.ParseIP(queryIP), net.ParseIP(responseIP)
 	if q == nil || r == nil {
 		return model.IPMatchMismatch
 	}
-	if q4, r4 := q.To4(), r.To4(); q4 != nil && r4 != nil {
-		mask := net.CIDRMask(24, 32)
-		if q4.Mask(mask).Equal(r4.Mask(mask)) {
-			return model.IPMatchCIDR
-		}
+	// Canonical equality: parsed-IP equality, not string comparison.
+	if q.Equal(r) {
+		return model.IPMatchExact
+	}
+	// A different IP only counts as CIDR-level (neighbor) data when the
+	// vendor's DECLARED CIDR from the same response parses and covers BOTH
+	// addresses. Same /24 or /64 alone is not proof; no valid covering CIDR
+	// means mismatch. A neighbor match is a reference datapoint about a
+	// nearby address — never a precise score for the queried IP and never
+	// proof that the whole CIDR shares that score.
+	_, cidrNet, err := net.ParseCIDR(strings.TrimSpace(declaredCIDR))
+	if err != nil {
 		return model.IPMatchMismatch
 	}
-	mask := net.CIDRMask(64, 128)
-	if q.To16().Mask(mask).Equal(r.To16().Mask(mask)) {
+	if cidrNet.Contains(q) && cidrNet.Contains(r) {
 		return model.IPMatchCIDR
 	}
 	return model.IPMatchMismatch
