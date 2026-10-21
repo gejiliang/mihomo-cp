@@ -5,6 +5,9 @@ export interface TrafficProvider {
   name: string;
   quota_bytes: number;
   reset_day: number;
+  reset_hour: number;
+  reset_minute: number;
+  reset_timezone: string;
   node_patterns: string[];
   subscription_url: string;
   enabled: boolean;
@@ -76,6 +79,9 @@ export interface ProviderInput {
   name: string;
   quota_bytes: number;
   reset_day: number;
+  reset_hour: number;
+  reset_minute: number;
+  reset_timezone: string;
   node_patterns: string[];
   subscription_url: string;
   enabled: boolean;
