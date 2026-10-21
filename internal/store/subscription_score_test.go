@@ -284,3 +284,102 @@ func TestSettingsStorePersistsIsolationUnderlay(t *testing.T) {
 }
 
 func intPointer(v int) *int { return &v }
+
+func TestNodeScoreStoreOKRowEligibleAtWeeklyBoundary(t *testing.T) {
+	db := openStoreTestDB(t)
+	scores := NewNodeScoreStore(db)
+	now := time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC)
+	nextDue := now.Add(RefreshIntervalForStoreTest)
+
+	row := &model.NodeScore{
+		NodeKey: "static/Weekly-Refresh", Source: "static", NodeName: "Weekly-Refresh",
+		Status: model.ScoreStatusOK, Fingerprint: "stable-fingerprint",
+		ClaudeScore: intPointer(88), LastSuccessAt: model.NewNullTime(now),
+		NextDue: model.NewNullTime(nextDue),
+	}
+	if err := scores.Upsert(row); err != nil {
+		t.Fatal(err)
+	}
+
+	// A successful row must not be selected before its weekly due time.
+	before, err := scores.ListDue(nextDue.Add(-time.Second), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("successful row selected before next_due: %+v", before)
+	}
+
+	// A new store on the same DB simulates a service restart; the row must
+	// remain eligible based on its persisted next_due, not its status alone.
+	restarted := NewNodeScoreStore(db)
+	due, err := restarted.ListDue(nextDue, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].NodeKey != row.NodeKey {
+		t.Fatalf("weekly-due successful row not selected after restart: %+v", due)
+	}
+
+	claimed, err := restarted.Claim(row.NodeKey, nextDue)
+	if err != nil {
+		t.Fatalf("claim weekly-due successful row: %v", err)
+	}
+	if !claimed {
+		t.Fatal("weekly-due successful row was not claimable for automatic dispatch")
+	}
+	got, err := restarted.Get(row.NodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != model.ScoreStatusTesting {
+		t.Errorf("claimed status = %q, want testing", got.Status)
+	}
+}
+
+func TestNodeScoreStoreListDueComparesAbsoluteTimeAcrossZones(t *testing.T) {
+	db := openStoreTestDB(t)
+	scores := NewNodeScoreStore(db)
+	baseUTC := time.Date(2026, time.October, 21, 4, 0, 0, 0, time.UTC)
+	zone := time.FixedZone("UTC+8", 8*60*60)
+	nowLocal := baseUTC.In(zone) // same instant, +08:00 presentation
+
+	future := &model.NodeScore{
+		NodeKey: "static/Future", Source: "static", NodeName: "Future",
+		Status: model.ScoreStatusPending, NextDue: model.NewNullTime(baseUTC.Add(time.Hour)),
+	}
+	past := &model.NodeScore{
+		NodeKey: "static/Past", Source: "static", NodeName: "Past",
+		Status: model.ScoreStatusPending, NextDue: model.NewNullTime(baseUTC.Add(-time.Hour)),
+	}
+	for _, row := range []*model.NodeScore{future, past} {
+		if err := scores.Upsert(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	due, err := scores.ListDue(nowLocal, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].NodeKey != past.NodeKey {
+		t.Fatalf("ListDue at +08:00 selected %+v, want only the past row (future row must not be premature)", due)
+	}
+
+	// At the exact future instant in its own zone it becomes due.
+	dueAtFuture, err := scores.ListDue(baseUTC.Add(time.Hour).In(zone), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, row := range dueAtFuture {
+		if row.NodeKey == future.NodeKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("future row not due at its exact boundary: %+v", dueAtFuture)
+	}
+}
+
+const RefreshIntervalForStoreTest = 7 * 24 * time.Hour

@@ -550,3 +550,100 @@ func TestScoringCadenceConstants(t *testing.T) {
 		t.Errorf("DispatchInterval = %s, want timely dispatch", DispatchInterval)
 	}
 }
+
+type fakeEgressProber struct {
+	client *http.Client
+	calls  int32
+}
+
+func (f *fakeEgressProber) Probe(ctx context.Context, topo *IsolationTopology, iso IsolationConfig) (*EgressSession, error) {
+	atomic.AddInt32(&f.calls, 1)
+	return &EgressSession{Client: f.client, Close: func() {}}, nil
+}
+
+func TestAutomaticWeeklyRefreshDispatchesOKRowAfterRestart(t *testing.T) {
+	env := newScoringTestEnv(t)
+	proxy := env.addStaticProxy(t, "Weekly-Refresh")
+	due := env.now.Add(RefreshInterval)
+
+	var upstreamCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/claude-trace":
+			atomic.AddInt32(&upstreamCalls, 1)
+			_, _ = w.Write([]byte("ip=203.0.113.10\n"))
+		case "/api/iprisk/203.0.113.10":
+			atomic.AddInt32(&upstreamCalls, 1)
+			writeJSON(w, http.StatusOK, map[string]any{"ip": "203.0.113.10", "trust_score": 88})
+		case "/api/ip/lookup/203.0.113.10":
+			atomic.AddInt32(&upstreamCalls, 1)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ip": "203.0.113.10", "cidr": "203.0.113.0/24", "trust_score": 40,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	row := &model.NodeScore{
+		NodeKey: store.NewNodeKey("static", "", "Weekly-Refresh"), Source: "static",
+		NodeName: "Weekly-Refresh", Status: model.ScoreStatusOK,
+		Fingerprint:   staticFingerprint(proxy),
+		ClaudeScore:   intPtr(88),
+		LastSuccessAt: model.NewNullTime(env.now),
+		NextDue:       model.NewNullTime(due),
+	}
+	if err := env.scores.Upsert(row); err != nil {
+		t.Fatal(err)
+	}
+
+	prober := &fakeEgressProber{client: srv.Client()}
+	restarted := NewScoringService(
+		env.scores, env.proxies, env.groups, env.subs, env.configs, env.settings, prober,
+	)
+	restarted.nowFn = func() time.Time { return env.now }
+	restarted.claudeTraceURL = srv.URL + "/claude-trace"
+	restarted.cfTraceURL = srv.URL + "/cf-trace"
+	restarted.netcoffeeBase = srv.URL
+
+	// Simulate a service restart: startup reconciliation must not requeue an
+	// unchanged OK row, but its persisted next_due must remain effective.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	restarted.Run(ctx)
+
+	restarted.dispatch(context.Background())
+	if got := atomic.LoadInt32(&prober.calls); got != 0 {
+		t.Errorf("automatic dispatch probed the successful row before its weekly due time: %d", got)
+	}
+	if got := atomic.LoadInt32(&upstreamCalls); got != 0 {
+		t.Errorf("upstream calls before due time = %d, want 0", got)
+	}
+
+	env.now = due
+	restarted.dispatch(context.Background())
+	if got := atomic.LoadInt32(&prober.calls); got != 1 {
+		t.Errorf("automatic dispatch probes at weekly boundary = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&upstreamCalls); got == 0 {
+		t.Error("automatic dispatch at weekly boundary made no scoring requests")
+	}
+
+	updated, err := env.scores.Get(row.NodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != model.ScoreStatusOK {
+		t.Errorf("refreshed status = %q, want ok", updated.Status)
+	}
+	if updated.ClaudeScore == nil || *updated.ClaudeScore != 88 {
+		t.Errorf("refreshed score = %v, want 88", updated.ClaudeScore)
+	}
+	if !nullTimeAt(updated.NextDue, due.Add(RefreshInterval)) {
+		t.Errorf("next weekly due = %+v, want %s", updated.NextDue, due.Add(RefreshInterval))
+	}
+	if !nullTimeAt(updated.LastSuccessAt, due) {
+		t.Errorf("last success = %+v, want boundary", updated.LastSuccessAt)
+	}
+}
