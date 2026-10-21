@@ -242,4 +242,18 @@ var migrations = []string{
 	// interface/DNS are set via the settings API by the operator.
 	`ALTER TABLE app_settings ADD COLUMN isolation_interface TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE app_settings ADD COLUMN isolation_dns TEXT NOT NULL DEFAULT ''`,
+
+	// 020: traffic-source subscriptions — track an EXISTING traffic provider
+	// (static/legacy source) without creating a native proxy-provider entry.
+	// source_type defaults to "native" so existing rows keep their behavior;
+	// the aggregate columns hold vendor bandwidth-counter JSON snapshots
+	// (Just My Socks format: aggregate used/limit, no directions/expiry);
+	// vendor_reset_day is the vendor-OBSERVED reset day (no hour/timezone).
+	// One traffic-mode subscription per traffic provider, enforced by a
+	// partial unique index (race-safe alongside the service pre-check).
+	`ALTER TABLE subscriptions ADD COLUMN source_type TEXT NOT NULL DEFAULT 'native'`,
+	`ALTER TABLE subscriptions ADD COLUMN userinfo_is_aggregate INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE subscriptions ADD COLUMN userinfo_aggregate_used INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE subscriptions ADD COLUMN vendor_reset_day INTEGER NOT NULL DEFAULT 0`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_traffic_provider ON subscriptions(traffic_provider_id) WHERE source_type = 'traffic' AND traffic_provider_id != ''`,
 }

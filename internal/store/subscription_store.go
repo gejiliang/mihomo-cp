@@ -69,6 +69,24 @@ func (s *SubscriptionStore) GetByProvider(providerName string) (*model.Subscript
 	return &sub, nil
 }
 
+// GetByTrafficProvider returns the traffic-SOURCE subscription managing a
+// traffic provider, or ErrNotFound. Native subscriptions may reference the
+// same traffic provider for local accounting — they are not managers and do
+// not conflict.
+func (s *SubscriptionStore) GetByTrafficProvider(trafficProviderID string) (*model.Subscription, error) {
+	var sub model.Subscription
+	err := s.db.Get(&sub,
+		`SELECT * FROM subscriptions WHERE traffic_provider_id = ? AND source_type = 'traffic'`,
+		trafficProviderID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get subscription by traffic provider: %w", err)
+	}
+	return &sub, nil
+}
+
 // Create inserts a new subscription row.
 func (s *SubscriptionStore) Create(sub *model.Subscription) error {
 	now := time.Now().UTC()
@@ -76,14 +94,16 @@ func (s *SubscriptionStore) Create(sub *model.Subscription) error {
 	_, err := s.db.Exec(
 		`INSERT INTO subscriptions (
 			id, name, enabled, provider_name, quota_bytes, manual_expire,
-			reset_day, reset_hour, reset_minute, reset_timezone, traffic_provider_id, provider_source,
+			reset_day, reset_hour, reset_minute, reset_timezone, traffic_provider_id, provider_source, source_type,
 			userinfo_upload, userinfo_download, userinfo_total, userinfo_expire, userinfo_counters, userinfo_fetched_at,
+			userinfo_is_aggregate, userinfo_aggregate_used, vendor_reset_day,
 			last_refresh_at, last_success_at, last_refresh_error, last_provider_update,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sub.ID, sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
-		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource,
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource, sub.SourceType,
 		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
+		sub.UserinfoIsAggregate, sub.UserinfoAggregateUsed, sub.VendorResetDay,
 		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
 		sub.CreatedAt, sub.UpdatedAt,
 	)
@@ -102,10 +122,10 @@ func (s *SubscriptionStore) UpdateMetadata(sub *model.Subscription) error {
 	res, err := s.db.Exec(
 		`UPDATE subscriptions SET
 			name = ?, enabled = ?, provider_name = ?, quota_bytes = ?, manual_expire = ?,
-			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?, updated_at = ?
+			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?, source_type = ?, updated_at = ?
 		WHERE id = ?`,
 		sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
-		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource,
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource, sub.SourceType,
 		sub.UpdatedAt, sub.ID,
 	)
 	if err != nil {
@@ -125,9 +145,11 @@ func (s *SubscriptionStore) UpdateSnapshot(sub *model.Subscription) error {
 	res, err := s.db.Exec(
 		`UPDATE subscriptions SET
 			userinfo_upload = ?, userinfo_download = ?, userinfo_total = ?, userinfo_expire = ?, userinfo_counters = ?, userinfo_fetched_at = ?,
+			userinfo_is_aggregate = ?, userinfo_aggregate_used = ?, vendor_reset_day = ?,
 			last_refresh_at = ?, last_success_at = ?, last_refresh_error = ?, last_provider_update = ?, updated_at = ?
 		WHERE id = ?`,
 		sub.UserinfoUpload, sub.UserinfoDownload, sub.UserinfoTotal, sub.UserinfoExpire, sub.UserinfoCountersSeen, sub.UserinfoFetchedAt,
+		sub.UserinfoIsAggregate, sub.UserinfoAggregateUsed, sub.VendorResetDay,
 		sub.LastRefreshAt, sub.LastSuccessAt, sub.LastRefreshError, sub.LastProviderUpdate,
 		time.Now().UTC(), sub.ID,
 	)

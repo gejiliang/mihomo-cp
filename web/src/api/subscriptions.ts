@@ -13,13 +13,19 @@ export interface Subscription {
   id: string;
   name: string;
   enabled: boolean;
-  status: 'ok' | 'stale' | 'error' | 'disabled';
+  status: 'ok' | 'stale' | 'error' | 'disabled' | 'local' | string;
   last_error: string;
   provider_name: string;
   provider_source: 'created' | 'linked' | string;
   provider_exists: boolean;
   url_masked: string;
   node_count: number | null;
+  /** "native" (proxy-providers entry) or "traffic" (existing traffic provider). */
+  source_type: 'native' | 'traffic' | string;
+  /** Traffic provider display name (traffic sources only). */
+  traffic_provider_name: string;
+  /** Vendor-OBSERVED reset day-of-month; no hour/timezone is implied. */
+  supplier_reset_day: number | null;
   quota_bytes: number | null;
   used_bytes: number | null;
   remaining_bytes: number | null;
@@ -49,13 +55,16 @@ export interface SubscriptionInput {
   name: string;
   url?: string;
   provider_name?: string;
+  source_type?: 'native' | 'traffic';
+  traffic_provider_id?: string;
   quota_bytes?: number | null;
   manual_expire?: string | null;
-  reset_day: number;
-  reset_hour: number;
-  reset_minute: number;
+  // Omitted on traffic-source create so the backend inherits the selected
+  // provider's schedule; native subscriptions always send them.
+  reset_day?: number;
+  reset_hour?: number;
+  reset_minute?: number;
   timezone?: string;
-  traffic_provider_id?: string;
   enabled: boolean;
 }
 
@@ -68,7 +77,7 @@ export interface DiscoveredProvider {
 }
 
 export interface SubscriptionRefreshError {
-  code: 'rate_limited' | 'userinfo_failed' | 'provider_refresh_failed' | 'not_found' | string;
+  code: 'rate_limited' | 'userinfo_failed' | 'provider_refresh_failed' | 'source_missing' | 'not_found' | string;
   message: string;
   retry_after_seconds?: number;
 }
@@ -80,6 +89,7 @@ export interface SubscriptionRefreshResult {
 
 export interface DeleteSubscriptionResult {
   status: string;
+  source_type?: 'native' | 'traffic' | string;
   provider_name: string;
   provider_removed_from_draft?: boolean;
   draft_changed?: boolean;

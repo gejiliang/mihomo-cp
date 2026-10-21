@@ -32,6 +32,57 @@ truth). Creating/modifying a subscription edits the draft only — nothing is
 published automatically; the normal Publish Center preview → validate →
 publish flow applies. Vendor rules/DNS/global settings are never imported.
 
+### Source types
+
+`source_type` selects what the subscription tracks:
+
+- `"native"` (default): a proxy-providers entry in the draft, as documented
+  below. Create/update may add or edit the draft provider entry.
+- `"traffic"`: an **existing traffic provider row** (static/legacy node set
+  matched by its `node_patterns`). Adoption is metadata-only: the draft
+  config is never touched (`draft_changed` is always `false` on
+  create/update/delete/refresh), `provider_name` stays blank, no native
+  provider is created or refreshed, and the traffic provider's own
+  `subscription_url` remains the only URL source (never duplicated into the
+  subscription row). One traffic provider can be managed by at most one
+  traffic-source subscription (pre-check + partial unique index; native
+  subscriptions may still reference the same traffic provider for local
+  accounting). Deleting a traffic source removes only the tracking row —
+  the traffic provider, its historical accounting and all static
+  nodes/groups survive. Quota and the reset schedule are inherited from the
+  selected traffic provider at creation unless explicitly overridden; an
+  unknown/empty provider timezone inherits as empty (server-local). The
+  stored source type cannot be changed afterwards, `url` and
+  `provider_name` are rejected for traffic sources (400), and rebinding to
+  another traffic provider is validated for existence + uniqueness.
+
+### Traffic-source vendor payload (aggregate JSON)
+
+The subscription URL of a traffic provider may serve an aggregate
+bandwidth-counter JSON instead of the `subscription-userinfo` header:
+
+```json
+{"monthly_bw_limit_b":1000000000000,"bw_counter_b":123456789,"bw_reset_day_of_month":20}
+```
+
+Semantics (shared parser, used by subscription refresh, auto refresh and the
+legacy traffic polling):
+
+- `bw_counter_b` is the vendor's aggregate used bytes — the only accepted
+  aggregate-counter field. A payload without a valid nonnegative counter
+  (missing, negative, wrong type) FAILS the fetch; last-good snapshot is
+  kept and errors are sanitized. `0` is a genuine zero.
+- No per-direction upload/download is invented; the raw `userinfo` object is
+  `null` for aggregate snapshots (directional zeros would be fabricated).
+- No expiry and no hour/timezone exist in this format: `expires_at` stays
+  unknown unless manually supplemented, and `bw_reset_day_of_month` is
+  exposed as `supplier_reset_day` — vendor-OBSERVED, informational only.
+  It never feeds cycle math, and a locally configured schedule (with its
+  hour/timezone) stays authoritative and visibly locally configured.
+- The legacy traffic polling recognizes the format and skips writing it
+  into `traffic_userinfo` (storing zeros would fabricate directional usage
+  for the traffic page); both services may fetch the shared URL.
+
 | Method | Path | Description |
 |---|---|---|
 | GET    | `/api/subscriptions` | List subscriptions with status |
@@ -52,10 +103,13 @@ publish flow applies. Vendor rules/DNS/global settings are never imported.
   "id": "b7e6…",
   "name": "示例机场",
   "enabled": true,
-  "status": "ok",                          // ok | stale | error | disabled
+  "status": "ok",                          // ok | stale | error | disabled | local (traffic source without URL)
   "last_error": "",                        // sanitized; empty when healthy
-  "provider_name": "示例机场",             // proxy-providers key in system config
-  "provider_source": "created",            // created | linked
+  "source_type": "native",                 // native | traffic
+  "traffic_provider_name": "",             // traffic sources: linked traffic provider name
+  "supplier_reset_day": null,              // vendor-OBSERVED day-of-month; no hour/timezone implied
+  "provider_name": "示例机场",             // proxy-providers key in system config ("" for traffic sources)
+  "provider_source": "created",            // created | linked ("" for traffic sources)
   "provider_exists": true,                 // present in draft proxy-providers now
   "url_masked": "https://sub.example.com/…",
   "node_count": 42,                        // null = unknown (provider cache not readable)
@@ -90,7 +144,20 @@ Field semantics:
 
 - `status`: `disabled` when `enabled=false`; `error` when the latest refresh
   attempt failed (message in `last_error`); `stale` when the vendor snapshot
-  is missing or older than 24h; otherwise `ok`.
+  is missing or older than 24h; `local` for an enabled traffic source whose
+  traffic provider has no subscription URL (healthy, local data only —
+  vendor usage/expiry unknown, never labeled stale); otherwise `ok`.
+- Traffic sources: `node_count` counts the static proxy names matched by the
+  traffic provider's `node_patterns` (flat matching — never group/fallback
+  traversal); `provider_exists` is always `false` and that is NOT an error;
+  `url_masked` masks the traffic provider's subscription URL (empty when the
+  provider has none). A vanished traffic provider row surfaces as `status:
+  "error"` with `last_error` "linked traffic provider no longer exists".
+  Before the first refresh, cached vendor quota/expiry from the traffic
+  provider's own polling may be shown (`expires_source: "vendor"`), but
+  vendor counters from that cache are never adopted (the cache cannot
+distinguish real zeros from absent counters) — usage stays local until the
+  subscription's own refresh.
 - Quota/usage: vendor numbers come from the `subscription-userinfo` header of
   the subscription URL (fetched by this service; snapshots survive failed
   refreshes). Presence is tracked independently from values: a header without
@@ -111,13 +178,14 @@ Field semantics:
 ```json
 {
   "name": "示例机场",
-  "url": "https://sub.example.com/token/…",   // required unless provider_name links an existing provider
-  "provider_name": "示例机场",                 // proxy-providers key; default = name
-  "quota_bytes": 214748364800,                 // manual supplement, optional
+  "source_type": "native",                    // or "traffic" (create-only)
+  "url": "https://sub.example.com/token/…",   // native: required unless provider_name links an existing provider; traffic: rejected
+  "provider_name": "示例机场",                 // proxy-providers key; default = name; rejected for traffic sources
+  "traffic_provider_id": "",                  // traffic sources: required, the adopted provider
+  "quota_bytes": 214748364800,                 // manual supplement; omitted on traffic create = inherit provider quota
   "manual_expire": "2027-01-09T12:00:00+08:00",// RFC3339 or omitted
   "reset_day": 10, "reset_hour": 12, "reset_minute": 0,
-  "timezone": "Asia/Shanghai",                 // IANA; omitted/"" = server local
-  "traffic_provider_id": "",                   // optional link for local usage
+  "timezone": "Asia/Shanghai",                 // IANA; omitted/"" = server local; omitted on traffic create = inherit
   "enabled": true
 }
 ```
@@ -135,8 +203,13 @@ Field semantics:
 - `PUT /api/subscriptions/{id}` accepts the same body; an absent/empty `url`
   keeps the stored provider URL untouched. `timezone` accepts any IANA name
   and is validated (`400 {"error":{"code":"bad_request"}}` otherwise).
+  For traffic sources, updates are metadata-only (never a draft change):
+  `url`/`provider_name` are rejected, `source_type` is immutable, and
+  omitted quota/reset fields keep the stored values (no re-inheritance on
+  provider rebind).
 - Response: the subscription object above, plus `"draft_changed": true` when
   the draft config was modified (GUI points users at Publish Center).
+  Traffic sources never set it (always absent/false).
 
 ### Delete
 
@@ -145,7 +218,10 @@ references it, the native provider entry is removed from the draft
 `proxy-providers` (effective via the normal Publish Center flow) and the
 metadata row plus its node score rows are deleted. A deletion that only
 removed metadata while the provider kept downloading/being used would be
-misleading, so that is not the behavior.
+misleading, so that is not the behavior. Traffic sources delete
+metadata-only: no draft change, no group-reference check (no native
+provider exists), and the response carries `"source_type": "traffic"` with
+`"draft_changed": false`.
 
 - If any proxy-group's `use` references the provider, the backend refuses with
   `409 {"error":{"code":"referenced","message":"…","references":["AI 组","手动选择"]}}`
@@ -169,13 +245,21 @@ Success response:
 
 ### Refresh
 
-`POST /api/subscriptions/{id}/refresh` — re-fetches `subscription-userinfo`,
-asks the running mihomo to refresh the provider (`PUT /providers/proxies/{name}`,
-best effort), and re-enqueues newly discovered nodes for scoring. Never
-publishes and never touches mode/selector state.
+`POST /api/subscriptions/{id}/refresh` — for native subscriptions,
+re-fetches `subscription-userinfo`, asks the running mihomo to refresh the
+provider (`PUT /providers/proxies/{name}`, best effort), and re-enqueues
+newly discovered nodes for scoring. For traffic sources, fetches the linked
+traffic provider's subscription URL (aggregate JSON or header format),
+persists the vendor snapshot onto the subscription row with source
+re-validation (a mid-flight URL rebind discards the fetched data), makes NO
+request to native `/providers/proxies`, and never mutates the draft; a
+source without a URL refreshes successfully with `status: "local"` and
+unknown supplier expiry. Both kinds: errors are sanitized, rate limits are
+surfaced, and a failed fetch keeps the last good snapshot (stale-on-error).
+Never publishes and never touches mode/selector state.
 
 Response: `{ "subscription": {...}, "error": null }` or
-`{ "subscription": {...}, "error": {"code": "rate_limited|userinfo_failed|provider_refresh_failed|not_found", "message": "<sanitized>", "retry_after_seconds": 3600 } }`.
+`{ "subscription": {...}, "error": {"code": "rate_limited|userinfo_failed|provider_refresh_failed|source_missing|not_found", "message": "<sanitized>", "retry_after_seconds": 3600 } }`.
 Rate limits are surfaced, never retried silently.
 
 ### The `enabled` switch

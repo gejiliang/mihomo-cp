@@ -143,6 +143,10 @@ export function SubscriptionForm({
   const locale = useI18nStore((s) => s.locale) === 'zh' ? 'zh-CN' : 'en-GB';
 
   const [name, setName] = useState('');
+  // "native" = proxy-providers entry in the draft; "traffic" = existing
+  // traffic provider (static/legacy source, no native provider created).
+  // The type is chosen at creation and immutable afterwards.
+  const [sourceType, setSourceType] = useState<'native' | 'traffic'>('native');
   const [providerName, setProviderName] = useState('');
   const [providerTouched, setProviderTouched] = useState(false);
   const [url, setUrl] = useState('');
@@ -153,6 +157,7 @@ export function SubscriptionForm({
   const [expiryDirty, setExpiryDirty] = useState(false);
   const [expiryTimezone, setExpiryTimezone] = useState(browserTimezone());
   const [resetConfigured, setResetConfigured] = useState(false);
+  const [resetDirty, setResetDirty] = useState(false);
   const [resetDay, setResetDay] = useState('1');
   const [resetHour, setResetHour] = useState('0');
   const [resetMinute, setResetMinute] = useState('0');
@@ -167,6 +172,7 @@ export function SubscriptionForm({
     setUrl('');
     if (subscription) {
       setName(subscription.name);
+      setSourceType(subscription.source_type === 'traffic' ? 'traffic' : 'native');
       setProviderName(subscription.provider_name || subscription.name);
       setProviderTouched(true);
       setEnabled(subscription.enabled);
@@ -187,6 +193,7 @@ export function SubscriptionForm({
       );
       const hasReset = subscription.reset_day >= 1;
       setResetConfigured(hasReset);
+      setResetDirty(false);
       setResetDay(hasReset ? String(subscription.reset_day) : '1');
       setResetHour(String(subscription.reset_hour || 0));
       setResetMinute(String(subscription.reset_minute || 0));
@@ -196,6 +203,7 @@ export function SubscriptionForm({
       setTrafficProviderID(subscription.traffic_provider_id || '');
     } else {
       setName('');
+      setSourceType('native');
       setProviderName('');
       setProviderTouched(false);
       setEnabled(true);
@@ -205,6 +213,7 @@ export function SubscriptionForm({
       setExpiryDirty(false);
       setExpiryTimezone(browserTimezone());
       setResetConfigured(false);
+      setResetDirty(false);
       setResetDay('1');
       setResetHour('0');
       setResetMinute('0');
@@ -236,6 +245,27 @@ export function SubscriptionForm({
 
   const handleTimezoneChange = (value: string) => {
     setTimezone(value);
+    setResetDirty(true);
+  };
+
+  // Selecting a traffic provider at creation shows what will be inherited
+  // (quota, reset schedule) without marking the fields dirty — untouched
+  // fields are omitted so the backend inherits, touched fields are sent as
+  // explicit overrides.
+  const handleTrafficProviderChange = (value: string) => {
+    setTrafficProviderID(value);
+    if (subscription) return; // editing: no re-inheritance on rebind
+    const tp = trafficProviders.find((p) => p.id === value);
+    if (!tp) return;
+    setQuotaGB(tp.quota_bytes > 0 ? String(Math.round((tp.quota_bytes / GB) * 100) / 100) : '');
+    setQuotaDirty(false);
+    const hasReset = tp.reset_day >= 1;
+    setResetConfigured(hasReset);
+    setResetDay(hasReset ? String(tp.reset_day) : '1');
+    setResetHour(String(tp.reset_hour || 0));
+    setResetMinute(String(tp.reset_minute || 0));
+    setTimezone(tp.reset_timezone || '');
+    setResetDirty(false);
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -245,6 +275,7 @@ export function SubscriptionForm({
     const trimmedName = name.trim();
     const trimmedProvider = providerName.trim() || trimmedName;
     const trimmedUrl = url.trim();
+    const isTraffic = sourceType === 'traffic';
     const quota = quotaGB.trim() === '' ? null : Number(quotaGB);
     const manualExpiryISO = manualExpiry ? wallTimeToISO(manualExpiry, expiryTimezone) : '';
     const day = resetConfigured ? Number(resetDay) : 0;
@@ -282,49 +313,79 @@ export function SubscriptionForm({
       setFormError(t('subscriptions.formInvalid'));
       return;
     }
-    if (linkedElsewhere) {
-      setFormError(t('subscriptions.providerConflict'));
-      return;
-    }
-    if (
-      subscription &&
-      trimmedProvider !== subscription.provider_name &&
-      !existingProvider
-    ) {
-      setFormError(t('subscriptions.providerMustExist'));
-      return;
-    }
-    if (!existingProvider && !trimmedUrl) {
-      setFormError(t('subscriptions.urlRequired'));
-      return;
+    if (isTraffic) {
+      if (!trafficProviderID) {
+        setFormError(t('subscriptions.trafficProviderRequired'));
+        return;
+      }
+    } else {
+      if (linkedElsewhere) {
+        setFormError(t('subscriptions.providerConflict'));
+        return;
+      }
+      if (
+        subscription &&
+        trimmedProvider !== subscription.provider_name &&
+        !existingProvider
+      ) {
+        setFormError(t('subscriptions.providerMustExist'));
+        return;
+      }
+      if (!existingProvider && !trimmedUrl) {
+        setFormError(t('subscriptions.urlRequired'));
+        return;
+      }
     }
 
     const input: SubscriptionInput = {
       name: trimmedName,
-      provider_name: trimmedProvider,
       enabled,
-      reset_day: day,
-      reset_hour: hour,
-      reset_minute: minute,
-      timezone: resetConfigured ? timezone.trim() : '',
     };
-    // Creating against an existing provider must omit the URL (link-only).
-    // Editing the current subscription's own provider may update its URL;
-    // switching to a different existing provider must not overwrite that
-    // provider's stored URL.
-    const editingCurrentProvider =
-      !!subscription && trimmedProvider === subscription.provider_name;
-    const mayUpdateProviderURL = !existingProvider || editingCurrentProvider;
-    if (mayUpdateProviderURL && trimmedUrl) input.url = trimmedUrl;
-    // Only send supplement fields the user deliberately changed. Omitting
-    // them preserves vendor/manual values already stored by the backend.
-    if (quotaDirty) {
-      input.quota_bytes = quota !== null ? Math.round(quota * GB) : 0;
+    if (isTraffic) {
+      // Traffic source: no URL, no provider name — the traffic provider owns
+      // both. Untouched quota/reset fields are omitted so the backend
+      // inherits them from the selected provider (create) or keeps the
+      // stored values (edit). The stored source type is immutable and never
+      // sent on edit.
+      input.traffic_provider_id = trafficProviderID;
+      if (!subscription) {
+        input.source_type = 'traffic';
+      }
+      if (quotaDirty) {
+        input.quota_bytes = quota !== null ? Math.round(quota * GB) : 0;
+      }
+      if (resetDirty) {
+        input.reset_day = day;
+        input.reset_hour = hour;
+        input.reset_minute = minute;
+        input.timezone = resetConfigured ? timezone.trim() : '';
+      }
+    } else {
+      input.provider_name = trimmedProvider;
+      input.reset_day = day;
+      input.reset_hour = hour;
+      input.reset_minute = minute;
+      input.timezone = resetConfigured ? timezone.trim() : '';
+      // Creating against an existing provider must omit the URL (link-only).
+      // Editing the current subscription's own provider may update its URL;
+      // switching to a different existing provider must not overwrite that
+      // provider's stored URL.
+      const editingCurrentProvider =
+        !!subscription && trimmedProvider === subscription.provider_name;
+      const mayUpdateProviderURL = !existingProvider || editingCurrentProvider;
+      if (mayUpdateProviderURL && trimmedUrl) input.url = trimmedUrl;
+      // Only send supplement fields the user deliberately changed. Omitting
+      // them preserves vendor/manual values already stored by the backend.
+      if (quotaDirty) {
+        input.quota_bytes = quota !== null ? Math.round(quota * GB) : 0;
+      }
     }
     if (expiryDirty) {
       input.manual_expire = manualExpiryISO ?? '';
     }
-    input.traffic_provider_id = trafficProviderID;
+    if (!isTraffic) {
+      input.traffic_provider_id = trafficProviderID;
+    }
 
     setSaving(true);
     try {
@@ -351,6 +412,43 @@ export function SubscriptionForm({
             <h3 className="text-sm font-medium text-muted-foreground">
               {t('subscriptions.sectionBasic')}
             </h3>
+            {!subscription && (
+              <div className="space-y-1.5">
+                <Label>{t('subscriptions.sourceType')}</Label>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="subscription-source-type"
+                      className="mt-1 h-4 w-4"
+                      checked={sourceType === 'native'}
+                      onChange={() => setSourceType('native')}
+                    />
+                    <span>
+                      <span className="font-medium">{t('subscriptions.sourceTypeNative')}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {t('subscriptions.sourceTypeNativeHint')}
+                      </span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="subscription-source-type"
+                      className="mt-1 h-4 w-4"
+                      checked={sourceType === 'traffic'}
+                      onChange={() => setSourceType('traffic')}
+                    />
+                    <span>
+                      <span className="font-medium">{t('subscriptions.sourceTypeTraffic')}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {t('subscriptions.sourceTypeTrafficHint')}
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="subscription-name">{t('common.name')}</Label>
               <Input
@@ -361,6 +459,32 @@ export function SubscriptionForm({
                 required
               />
             </div>
+            {sourceType === 'traffic' ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="subscription-traffic-source">{t('subscriptions.trafficSource')}</Label>
+                <select
+                  id="subscription-traffic-source"
+                  className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm"
+                  value={trafficProviderID}
+                  onChange={(e) => handleTrafficProviderChange(e.target.value)}
+                >
+                  <option value="">{t('subscriptions.trafficSourceSelect')}</option>
+                  {trafficProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">{t('subscriptions.sourceTypeTrafficHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('subscriptions.urlManagedByTrafficSource')}</p>
+                {subscription && subscription.url_masked && (
+                  <p className="truncate font-mono text-xs text-muted-foreground" title={t('subscriptions.urlMaskedHint')}>
+                    {subscription.url_masked}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
             <div className="space-y-1.5">
               <Label htmlFor="subscription-provider">{t('subscriptions.providerName')}</Label>
               <Input
@@ -408,6 +532,8 @@ export function SubscriptionForm({
                 </p>
               )}
             </div>
+              </>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -455,6 +581,7 @@ export function SubscriptionForm({
                 onChange={(e) => {
                   const checked = e.target.checked;
                   setResetConfigured(checked);
+                  setResetDirty(true);
                   if (checked && (!resetDay || resetDay === '0')) setResetDay('1');
                 }}
               />
@@ -473,7 +600,10 @@ export function SubscriptionForm({
                   max={31}
                   disabled={!resetConfigured}
                   value={resetDay}
-                  onChange={(e) => setResetDay(e.target.value)}
+                  onChange={(e) => {
+                    setResetDay(e.target.value);
+                    setResetDirty(true);
+                  }}
                 />
               </div>
               <div className="space-y-1.5">
@@ -485,7 +615,10 @@ export function SubscriptionForm({
                   max={23}
                   disabled={!resetConfigured}
                   value={resetHour}
-                  onChange={(e) => setResetHour(e.target.value)}
+                  onChange={(e) => {
+                    setResetHour(e.target.value);
+                    setResetDirty(true);
+                  }}
                 />
               </div>
               <div className="space-y-1.5">
@@ -497,7 +630,10 @@ export function SubscriptionForm({
                   max={59}
                   disabled={!resetConfigured}
                   value={resetMinute}
-                  onChange={(e) => setResetMinute(e.target.value)}
+                  onChange={(e) => {
+                    setResetMinute(e.target.value);
+                    setResetDirty(true);
+                  }}
                 />
               </div>
             </div>
@@ -518,23 +654,25 @@ export function SubscriptionForm({
               </datalist>
               <p className="text-xs text-muted-foreground">{t('subscriptions.resetHint')}</p>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="subscription-traffic-provider">{t('subscriptions.localProvider')}</Label>
-              <select
-                id="subscription-traffic-provider"
-                className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm"
-                value={trafficProviderID}
-                onChange={(e) => setTrafficProviderID(e.target.value)}
-              >
-                <option value="">{t('subscriptions.localProviderNone')}</option>
-                {trafficProviders.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-muted-foreground">{t('subscriptions.localProviderHint')}</p>
-            </div>
+            {sourceType === 'native' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="subscription-traffic-provider">{t('subscriptions.localProvider')}</Label>
+                <select
+                  id="subscription-traffic-provider"
+                  className="flex h-8 w-full rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm"
+                  value={trafficProviderID}
+                  onChange={(e) => setTrafficProviderID(e.target.value)}
+                >
+                  <option value="">{t('subscriptions.localProviderNone')}</option>
+                  {trafficProviders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">{t('subscriptions.localProviderHint')}</p>
+              </div>
+            )}
           </section>
 
           <Separator />

@@ -12,13 +12,23 @@ type Subscription struct {
 	Name    string `json:"name" db:"name"`
 	Enabled bool   `json:"enabled" db:"enabled"`
 
+	// SourceType selects what this subscription tracks:
+	//   - "native": a native mihomo proxy-provider entry in the system config
+	//     draft (the config source of truth); ProviderName carries its key.
+	//   - "traffic": an existing traffic provider row (static/legacy source);
+	//     ProviderName stays blank, no native provider entry is ever created,
+	//     and the traffic provider's own subscription URL is the only URL
+	//     source (never duplicated here).
+	SourceType string `json:"source_type" db:"source_type"`
+
 	// ProviderName is the key of the linked native proxy-provider in
-	// system_config["proxy-providers"]. Empty for subscriptions that only
-	// track metadata (e.g. before linking).
+	// system_config["proxy-providers"]. Empty for traffic-source
+	// subscriptions and for native ones before linking.
 	ProviderName string `json:"provider_name" db:"provider_name"`
-	// ProviderSource records how the association came to be:
+	// ProviderSource records how a NATIVE association came to be:
 	// "created" (subscription created the provider entry in the draft)
-	// or "linked" (an existing native provider was adopted).
+	// or "linked" (an existing native provider was adopted). Empty for
+	// traffic-source subscriptions.
 	ProviderSource string `json:"provider_source" db:"provider_source"`
 
 	// Manual supplements for vendor data missing from subscription-userinfo.
@@ -47,13 +57,33 @@ type Subscription struct {
 	UserinfoExpire   int64 `json:"userinfo_expire" db:"userinfo_expire"` // unix seconds, 0 = unknown
 	// UserinfoCountersSeen records that the last header carried BOTH upload
 	// and download; only then is vendor usage "known".
-	UserinfoCountersSeen bool     `json:"-" db:"userinfo_counters"`
-	UserinfoFetchedAt    NullTime `json:"-" db:"userinfo_fetched_at"`
-	LastRefreshAt        NullTime `json:"-" db:"last_refresh_at"`                     // last refresh attempt
-	LastSuccessAt        NullTime `json:"-" db:"last_success_at"`                     // last fully successful refresh
-	LastRefreshError     string   `json:"last_refresh_error" db:"last_refresh_error"` // sanitized, no URL/credentials
-	LastProviderUpdate   NullTime `json:"-" db:"last_provider_update"`                // last provider refresh via runtime API
+	UserinfoCountersSeen bool `json:"-" db:"userinfo_counters"`
+	// Aggregate vendor format (e.g. Just My Socks bandwidth-counter JSON):
+	// no per-direction counters exist. UserinfoIsAggregate marks the snapshot
+	// as aggregate; UserinfoAggregateUsed is the vendor-reported total used
+	// bytes (0 is a genuine zero when the flag is set). Mutually exclusive
+	// with the directional counters above; the latest fetch decides the mode.
+	UserinfoIsAggregate   bool  `json:"-" db:"userinfo_is_aggregate"`
+	UserinfoAggregateUsed int64 `json:"-" db:"userinfo_aggregate_used"`
+	// VendorResetDay is the vendor-OBSERVED reset day-of-month from an
+	// aggregate JSON payload (e.g. bw_reset_day_of_month). Informational
+	// only: it never feeds cycle math and carries no hour/timezone. 0 =
+	// vendor reported none.
+	VendorResetDay    int      `json:"-" db:"vendor_reset_day"`
+	UserinfoFetchedAt NullTime `json:"-" db:"userinfo_fetched_at"`
+	LastRefreshAt     NullTime `json:"-" db:"last_refresh_at"`      // last refresh attempt
+	LastSuccessAt     NullTime `json:"-" db:"last_success_at"`      // last fully successful refresh
+	LastRefreshError  string   `json:"last_refresh_error" db:"last_refresh_error"` // sanitized, no URL/credentials
+	LastProviderUpdate NullTime `json:"-" db:"last_provider_update"` // last provider refresh via runtime API
 }
+
+// Subscription source types. "native" tracks a mihomo proxy-provider entry in
+// the system-config draft; "traffic" tracks an existing traffic provider row
+// (static/legacy source) without ever creating a native provider entry.
+const (
+	SubscriptionSourceNative  = "native"
+	SubscriptionSourceTraffic = "traffic"
+)
 
 // DiscoveredProvider is a native proxy-provider found in the system config
 // draft that is not yet linked to a subscription row.

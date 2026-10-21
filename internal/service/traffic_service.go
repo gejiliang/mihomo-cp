@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"path"
@@ -227,7 +226,12 @@ func (s *TrafficService) flush() {
 // ── Vendor userinfo ──────────────────────────────────────────────────────────
 
 // fetchAllUserinfo refreshes vendor-reported usage for all providers that
-// have a subscription URL.
+// have a subscription URL. Aggregate counter payloads (e.g. Just My Socks
+// bandwidth-counter JSON) carry no directional counters and no expiry, so
+// they are recognized but NOT written into traffic_userinfo — storing them
+// would fabricate upload=0/download=0 for the traffic page. Such vendors are
+// tracked on the subscription page instead. Failure logs never contain the
+// authenticated URL (errors are sanitized in the shared fetch).
 func (s *TrafficService) fetchAllUserinfo() {
 	providers, err := s.store.ListProviders()
 	if err != nil {
@@ -238,41 +242,21 @@ func (s *TrafficService) fetchAllUserinfo() {
 		if !p.Enabled || p.SubscriptionURL == "" {
 			continue
 		}
-		info, err := s.fetchUserinfo(p.SubscriptionURL)
+		snap, err := FetchVendorInfo(s.http, p.SubscriptionURL)
 		if err != nil {
 			slog.Warn("traffic: fetch userinfo failed", "provider", p.Name, "err", err)
 			continue
 		}
+		if snap.IsAggregate() {
+			slog.Debug("traffic: aggregate counter payload; subscription metadata handles it", "provider", p.Name)
+			continue
+		}
+		info := snap.Info
 		info.ProviderID = p.ID
 		if err := s.store.UpsertUserinfo(info); err != nil {
 			slog.Error("traffic: store userinfo failed", "provider", p.Name, "err", err)
 		}
 	}
-}
-
-// fetchUserinfo GETs the subscription URL and parses the
-// subscription-userinfo header. The UA must be a clash.meta variant —
-// some vendors return empty configs (and no header) to unknown clients.
-func (s *TrafficService) fetchUserinfo(url string) (*model.TrafficUserinfo, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "clash.meta")
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("subscription returned %d", resp.StatusCode)
-	}
-	header := resp.Header.Get("subscription-userinfo")
-	if header == "" {
-		return nil, fmt.Errorf("no subscription-userinfo header")
-	}
-	return ParseUserinfo(header)
 }
 
 // ParseUserinfo parses "upload=1; download=2; total=3; expire=4".

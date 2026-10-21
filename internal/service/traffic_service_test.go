@@ -1,10 +1,18 @@
 package service
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
+	"github.com/gejiliang/mihomo-cp/internal/store"
 )
 
 func date(y int, m time.Month, d int) time.Time {
@@ -130,5 +138,81 @@ func TestEffectiveUsage(t *testing.T) {
 	}
 	if got := effectiveUsage(500, nil, now); got != 500 {
 		t.Errorf("no vendor report: got %d", got)
+	}
+}
+
+// Aggregate counter payloads (Just My Socks JSON) are recognized but never
+// written into traffic_userinfo — storing them would fabricate upload=0 /
+// download=0 for the traffic page. The vendor aggregate is tracked on the
+// subscription page instead.
+func TestFetchAllUserinfoSkipsAggregateJSON(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "traffic.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	ts := store.NewTrafficStore(db)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"monthly_bw_limit_b":1000000000000,"bw_counter_b":123456789,"bw_reset_day_of_month":20}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	tp := &model.TrafficProvider{
+		ID: "tp-jms", Name: "Legacy Traffic", Enabled: true,
+		SubscriptionURL: srv.URL, NodePatternList: []string{"Legacy-*"},
+	}
+	if err := ts.CreateProvider(tp); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewTrafficService(ts, nil, nil)
+	svc.fetchAllUserinfo() // must neither fail nor store fabricated counters
+
+	if _, err := ts.GetUserinfo(tp.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("aggregate payload must not be written as directional userinfo: %v", err)
+	}
+}
+
+// Failures are logged sanitized: the authenticated URL never reaches the log.
+func TestFetchAllUserinfoFailureDoesNotLogURL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "traffic.db")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Migrate(); err != nil {
+		t.Fatal(err)
+	}
+	ts := store.NewTrafficStore(db)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL + "/sub?token=secret-token-value"
+	srv.Close() // unreachable; URL carries a token
+
+	tp := &model.TrafficProvider{
+		ID: "tp-dead", Name: "Dead Vendor", Enabled: true,
+		SubscriptionURL: url, NodePatternList: []string{"*"},
+	}
+	if err := ts.CreateProvider(tp); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	svc := NewTrafficService(ts, nil, nil)
+	svc.fetchAllUserinfo()
+
+	if strings.Contains(logged.String(), "secret-token-value") || strings.Contains(logged.String(), "http://") {
+		t.Errorf("log leaked the authenticated URL:\n%s", logged.String())
 	}
 }

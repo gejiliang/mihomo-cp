@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 	"sync"
@@ -34,12 +34,21 @@ const AutoUserinfoInterval = 30 * time.Minute
 // system-config draft (the single config source of truth) and the vendor
 // userinfo snapshots. It never publishes and never touches vendor rules, DNS
 // or global settings.
+//
+// Two source types are supported:
+//   - "native": linked to (or creating) a proxy-providers entry in the draft.
+//     Create/update/delete/refresh may mutate the DRAFT provider entry.
+//   - "traffic": linked to an existing traffic provider row (static/legacy
+//     source). Every mutation is metadata-only: the draft config, native
+//     provider refresh and static proxies/groups are never touched, and
+//     draft_changed is always false.
 type SubscriptionService struct {
 	subs     *store.SubscriptionStore
 	configs  *store.ConfigStore
 	traffic  *store.TrafficStore
 	scores   *store.NodeScoreStore
 	groups   *store.ProxyGroupStore
+	proxies  *store.ProxyStore
 	mihomo   *MihomoClient
 	settings *store.SettingsStore
 	scorer   *ScoringService
@@ -62,6 +71,7 @@ func NewSubscriptionService(
 	traffic *store.TrafficStore,
 	scores *store.NodeScoreStore,
 	groups *store.ProxyGroupStore,
+	proxies *store.ProxyStore,
 	mihomo *MihomoClient,
 	settings *store.SettingsStore,
 	scorer *ScoringService,
@@ -72,6 +82,7 @@ func NewSubscriptionService(
 		traffic:  traffic,
 		scores:   scores,
 		groups:   groups,
+		proxies:  proxies,
 		mihomo:   mihomo,
 		settings: settings,
 		scorer:   scorer,
@@ -95,8 +106,9 @@ func (s *SubscriptionService) Run(ctx context.Context) {
 	}
 }
 
-// autoRefreshUserinfo refreshes vendor snapshots of enabled subscriptions
-// that have a provider entry with a URL. Disabled subscriptions are paused.
+// autoRefreshUserinfo refreshes vendor snapshots of enabled subscriptions:
+// native subs with a provider entry URL, and traffic-source subs whose linked
+// traffic provider has a subscription URL. Disabled subscriptions are paused.
 func (s *SubscriptionService) autoRefreshUserinfo() {
 	subs, err := s.subs.List()
 	if err != nil {
@@ -104,7 +116,16 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 	}
 	for i := range subs {
 		sub := &subs[i]
-		if !sub.Enabled || sub.ProviderName == "" {
+		if !sub.Enabled {
+			continue
+		}
+		if sub.SourceType == model.SubscriptionSourceTraffic {
+			if tp, err := s.traffic.GetProvider(sub.TrafficProviderID); err == nil && tp.SubscriptionURL != "" {
+				s.autoRefreshTrafficSource(sub, tp)
+			}
+			continue
+		}
+		if sub.ProviderName == "" {
 			continue
 		}
 		entry, err := s.findProviderEntry(sub.ProviderName)
@@ -147,6 +168,36 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 	}
 }
 
+// autoRefreshTrafficSource fetches the traffic provider's subscription URL
+// (shared with the legacy traffic polling) and persists the vendor snapshot
+// onto the subscription row only — the traffic provider row, its cache and
+// the draft are never touched. Source re-validation guards rebinds.
+func (s *SubscriptionService) autoRefreshTrafficSource(sub *model.Subscription, tp *model.TrafficProvider) {
+	fetchURL := tp.SubscriptionURL
+	snap, err := FetchVendorInfo(s.http, fetchURL) // outside the mutation lock
+	if err != nil {
+		slog.Debug("subscription: auto traffic-source refresh failed", "subscription", sub.Name, "err", err)
+		return // keep last good; background polls never set the error flag
+	}
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+	fresh, gerr := s.subs.Get(sub.ID)
+	if gerr != nil {
+		return
+	}
+	cur, cerr := s.traffic.GetProvider(fresh.TrafficProviderID)
+	if cerr != nil || cur.SubscriptionURL != fetchURL {
+		return // source rebound mid-flight: drop the stale-source result
+	}
+	now := s.nowFn()
+	applyVendorSnapshot(fresh, snap, now)
+	fresh.LastSuccessAt = model.NewNullTime(now)
+	fresh.LastRefreshError = ""
+	if err := s.subs.UpdateSnapshot(fresh); err != nil {
+		slog.Warn("subscription: auto traffic-source persist failed", "subscription", sub.Name, "err", err)
+	}
+}
+
 // ErrConflict marks uniqueness violations (duplicate subscription name or a
 // provider already managed by another subscription) — mapped to HTTP 409.
 type ErrConflict struct{ Message string }
@@ -174,10 +225,21 @@ type SubscriptionView struct {
 	LastError string `json:"last_error"`
 
 	ProviderName   string `json:"provider_name"`
-	ProviderSource string `json:"provider_source"` // created | linked
+	ProviderSource string `json:"provider_source"` // created | linked (native only; empty for traffic sources)
 	ProviderExists bool   `json:"provider_exists"`
 	URLMasked      string `json:"url_masked"`
 	NodeCount      *int   `json:"node_count"`
+
+	// SourceType: "native" (proxy-providers entry) or "traffic" (existing
+	// traffic provider; no native provider exists and that is NOT an error).
+	SourceType string `json:"source_type"`
+	// TrafficProviderName is the linked traffic provider's display name
+	// (traffic sources only; empty otherwise).
+	TrafficProviderName string `json:"traffic_provider_name"`
+	// SupplierResetDay is the vendor-OBSERVED reset day-of-month from an
+	// aggregate JSON payload. Informational only — the configured schedule
+	// below stays authoritative and no hour/timezone is implied.
+	SupplierResetDay *int `json:"supplier_reset_day"`
 
 	QuotaBytes     *int64 `json:"quota_bytes"`
 	UsedBytes      *int64 `json:"used_bytes"`
@@ -236,17 +298,45 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 		Enabled:           sub.Enabled,
 		ProviderName:      sub.ProviderName,
 		ProviderSource:    sub.ProviderSource,
+		SourceType:        sub.SourceType,
 		TrafficProviderID: sub.TrafficProviderID,
 		CreatedAt:         sub.CreatedAt,
 		UpdatedAt:         sub.UpdatedAt,
 		UsageSource:       "none",
 		ExpiresSource:     "unknown",
 	}
+	if v.SourceType == "" {
+		v.SourceType = model.SubscriptionSourceNative
+	}
+
+	// Traffic-source link. A missing native provider entry is normal for
+	// this type; a missing traffic provider row means the source itself is
+	// gone (surfaced as an error below).
+	var tp *model.TrafficProvider
+	if sub.SourceType == model.SubscriptionSourceTraffic && sub.TrafficProviderID != "" {
+		if got, err := s.traffic.GetProvider(sub.TrafficProviderID); err == nil {
+			tp = got
+		}
+		v.TrafficProviderName = tpName(tp)
+		if sub.VendorResetDay >= 1 && sub.VendorResetDay <= 31 {
+			day := sub.VendorResetDay
+			v.SupplierResetDay = &day
+		}
+		v.URLMasked = MaskURL(tpSubscriptionURL(tp))
+	}
 
 	// Status. disabled means "automatic metadata refresh & auto scoring
 	// paused" — the provider stays in the config and can still carry traffic.
+	// For traffic sources: a vanished traffic provider row is an error; a
+	// source without a subscription URL is healthy local-only data (never
+	// "stale" — there is nothing vendor-side to fetch).
 	if !sub.Enabled {
 		v.Status = "disabled"
+	} else if sub.SourceType == model.SubscriptionSourceTraffic && sub.TrafficProviderID != "" && tp == nil {
+		v.Status = "error"
+		v.LastError = "linked traffic provider no longer exists"
+	} else if sub.SourceType == model.SubscriptionSourceTraffic && tpSubscriptionURL(tp) == "" && sub.LastRefreshError == "" {
+		v.Status = "local"
 	} else if sub.LastRefreshError != "" && (sub.LastSuccessAt.IsZero() || sub.LastRefreshAt.Time.After(sub.LastSuccessAt.Time)) {
 		v.Status = "error"
 	} else if sub.UserinfoFetchedAt.IsZero() || now.Sub(sub.UserinfoFetchedAt.Time) > StaleAfter {
@@ -265,22 +355,32 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 	}
 	if !sub.UserinfoFetchedAt.IsZero() {
 		v.UserinfoFetchedAt = rfc3339Time(sub.UserinfoFetchedAt.Time)
-		v.Userinfo = &model.TrafficUserinfo{
-			ProviderID: sub.ID,
-			Upload:     sub.UserinfoUpload,
-			Download:   sub.UserinfoDownload,
-			Total:      sub.UserinfoTotal,
-			Expire:     sub.UserinfoExpire,
-			FetchedAt:  sub.UserinfoFetchedAt.Time,
+		if !sub.UserinfoIsAggregate {
+			// Aggregate snapshots carry no per-direction counters; projecting
+			// them as 0/0 would fabricate directions that the vendor never
+			// reported. The aggregate used value is exposed via used_bytes.
+			v.Userinfo = &model.TrafficUserinfo{
+				ProviderID: sub.ID,
+				Upload:     sub.UserinfoUpload,
+				Download:   sub.UserinfoDownload,
+				Total:      sub.UserinfoTotal,
+				Expire:     sub.UserinfoExpire,
+				FetchedAt:  sub.UserinfoFetchedAt.Time,
+			}
 		}
 	}
 
 	// Quota & usage. Vendor usage is "known" only when the header carried
-	// both counters; a total/expire-only header must not become used=0.
-	// Explicit upload=0;download=0 stays a genuine zero.
+	// both counters or the payload was an aggregate counter; a total/expire-
+	// only header must not become used=0. Explicit upload=0;download=0 and
+	// an explicit aggregate 0 stay genuine zeros.
 	vendorKnown := !sub.UserinfoFetchedAt.IsZero() && sub.UserinfoCountersSeen
 	if vendorKnown {
 		used := sub.UserinfoUpload + sub.UserinfoDownload
+		v.UsedBytes = &used
+		v.UsageSource = "vendor"
+	} else if !sub.UserinfoFetchedAt.IsZero() && sub.UserinfoIsAggregate {
+		used := sub.UserinfoAggregateUsed
 		v.UsedBytes = &used
 		v.UsageSource = "vendor"
 	}
@@ -321,6 +421,32 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 		v.ExpiresSource = "manual"
 	}
 
+	// Traffic-source supplements: when the subscription has no vendor
+	// snapshot of its own yet, fall back to the traffic provider's cached
+	// vendor data (fetched by legacy traffic polling) for quota/expiry —
+	// never for counters, which the cache cannot distinguish from absent.
+	// Recompute remaining if the fallback added a quota side.
+	if sub.SourceType == model.SubscriptionSourceTraffic && tp != nil && sub.UserinfoFetchedAt.IsZero() {
+		if cached, err := s.traffic.GetUserinfo(tp.ID); err == nil {
+			if quota == nil && cached.Total > 0 {
+				t := cached.Total
+				quota = &t
+				v.QuotaBytes = quota
+			}
+			if v.ExpiresAt == nil && cached.Expire > 0 {
+				v.ExpiresAt = rfc3339Time(time.Unix(cached.Expire, 0).UTC())
+				v.ExpiresSource = "vendor"
+			}
+			if quota != nil && v.UsedBytes != nil && v.RemainingBytes == nil {
+				rem := *quota - *v.UsedBytes
+				if rem < 0 {
+					rem = 0
+				}
+				v.RemainingBytes = &rem
+			}
+		}
+	}
+
 	// Billing reset schedule.
 	if sub.ResetDay >= 1 && sub.ResetDay <= 31 {
 		policy := ResetPolicy{Day: sub.ResetDay, Hour: sub.ResetHour, Minute: sub.ResetMinute, Timezone: sub.ResetTimezone}
@@ -339,6 +465,20 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 	}
 
 	// Provider presence, masked URL, node count.
+	if sub.SourceType == model.SubscriptionSourceTraffic {
+		// Traffic source: no native provider exists (that is normal, not an
+		// error) and the URL comes from the linked traffic provider (set
+		// above). Node count = actual static proxy names matched by the
+		// provider's node patterns — flat matching, never group/fallback
+		// traversal.
+		v.ProviderExists = false
+		v.ProviderSource = ""
+		v.ProviderName = ""
+		if tp != nil {
+			v.NodeCount = s.staticMatchedProxyCount(tp)
+		}
+		return v, nil
+	}
 	if sub.ProviderName != "" {
 		entry, err := s.findProviderEntry(sub.ProviderName)
 		v.ProviderExists = err == nil
@@ -350,6 +490,98 @@ func (s *SubscriptionService) View(sub *model.Subscription) (*SubscriptionView, 
 		}
 	}
 	return v, nil
+}
+
+// staticMatchedProxyCount counts distinct static proxy names in the draft
+// that match any of the traffic provider's node patterns. Flat name matching
+// only — group members and nested fallbacks are never counted.
+func (s *SubscriptionService) staticMatchedProxyCount(tp *model.TrafficProvider) *int {
+	if tp == nil || len(tp.NodePatternList) == 0 {
+		n := 0
+		return &n
+	}
+	proxies, err := s.proxies.List("", "")
+	if err != nil {
+		return nil // unknown
+	}
+	n := 0
+	for _, p := range proxies {
+		for _, pat := range tp.NodePatternList {
+			if ok, err := path.Match(pat, p.Name); err == nil && ok {
+				n++
+				break
+			}
+		}
+	}
+	return &n
+}
+
+// tpName safely resolves a traffic provider display name (nil-safe).
+func tpName(tp *model.TrafficProvider) string {
+	if tp == nil {
+		return ""
+	}
+	return tp.Name
+}
+
+// tpSubscriptionURL safely resolves a traffic provider's subscription URL
+// (nil-safe; the caller treats an empty URL as "no vendor link").
+func tpSubscriptionURL(tp *model.TrafficProvider) string {
+	if tp == nil {
+		return ""
+	}
+	return tp.SubscriptionURL
+}
+
+// applyVendorSnapshot writes a fetched VendorSnapshot onto a subscription
+// row. Header-format snapshots clear the aggregate fields and vice versa —
+// the latest fetch decides the snapshot mode. Aggregate payloads always
+// carry a valid counter (FetchVendorInfo guarantees it); the nil-counter
+// guard only prevents an invented zero if that invariant were ever broken.
+func applyVendorSnapshot(sub *model.Subscription, snap *VendorSnapshot, now time.Time) {
+	sub.UserinfoFetchedAt = model.NewNullTime(now)
+	if snap.Info == nil {
+		if snap.AggregateUsed == nil {
+			// Defensive: never claim a counter that was not reported.
+			sub.UserinfoIsAggregate = false
+			sub.UserinfoAggregateUsed = 0
+			sub.UserinfoUpload, sub.UserinfoDownload = 0, 0
+			sub.UserinfoCountersSeen = false
+			sub.UserinfoExpire = 0
+			if snap.AggregateLimit != nil {
+				sub.UserinfoTotal = *snap.AggregateLimit
+			} else {
+				sub.UserinfoTotal = 0
+			}
+			sub.VendorResetDay = 0
+			return
+		}
+		sub.UserinfoUpload, sub.UserinfoDownload = 0, 0
+		sub.UserinfoCountersSeen = false
+		sub.UserinfoExpire = 0
+		sub.UserinfoIsAggregate = true
+		sub.UserinfoAggregateUsed = *snap.AggregateUsed // genuine zero preserved
+		if snap.AggregateLimit != nil {
+			sub.UserinfoTotal = *snap.AggregateLimit
+		} else {
+			sub.UserinfoTotal = 0 // unknown, never a zero quota
+		}
+		if snap.VendorResetDay != nil {
+			sub.VendorResetDay = *snap.VendorResetDay
+		} else {
+			sub.VendorResetDay = 0
+		}
+		return
+	}
+	info := snap.Info
+	sub.UserinfoUpload = info.Upload
+	sub.UserinfoDownload = info.Download
+	sub.UserinfoTotal = info.Total
+	sub.UserinfoExpire = info.Expire
+	sub.UserinfoCountersSeen = info.HasCounters
+	sub.UserinfoIsAggregate = false
+	sub.UserinfoAggregateUsed = 0
+	sub.VendorResetDay = 0
 }
 
 // localUsed sums locally-sampled hourly usage of the linked traffic provider
@@ -583,11 +815,14 @@ func (s *SubscriptionService) groupsUsingProvider(name string) ([]string, error)
 
 // SubscriptionRequest is the create/update payload. All fields are pointers:
 // nil means "not provided" on update and keeps the stored value; an empty
-// url keeps the stored secret.
+// url keeps the stored secret. source_type selects "native" (default) or
+// "traffic" (existing traffic provider; create-only — a stored source type
+// never changes via update).
 type SubscriptionRequest struct {
 	Name              *string `json:"name"`
 	URL               *string `json:"url"`
 	ProviderName      *string `json:"provider_name"`
+	SourceType        *string `json:"source_type"`
 	QuotaBytes        *int64  `json:"quota_bytes"`
 	ManualExpire      *string `json:"manual_expire"` // RFC3339
 	ResetDay          *int    `json:"reset_day"`
@@ -643,6 +878,9 @@ func (r *SubscriptionRequest) applyTo(sub *model.Subscription) error {
 	return nil
 }
 
+// validateSourceType trims and validates a requested source type. An absent
+// value defaults to "native" (existing behavior).
+
 func validateReset(sub *model.Subscription) error {
 	if sub.ResetDay == 0 {
 		if sub.ResetHour != 0 || sub.ResetMinute != 0 {
@@ -672,9 +910,23 @@ func (s *SubscriptionService) Create(req *SubscriptionRequest) (*SubscriptionVie
 		ID:             uuid.New().String(),
 		Enabled:        true,
 		ProviderSource: "created",
+		SourceType:     model.SubscriptionSourceNative,
 	}
 	if err := req.applyTo(sub); err != nil {
 		return nil, false, err
+	}
+	if req.SourceType != nil {
+		switch st := strings.TrimSpace(*req.SourceType); st {
+		case "":
+			sub.SourceType = model.SubscriptionSourceNative
+		case model.SubscriptionSourceNative, model.SubscriptionSourceTraffic:
+			sub.SourceType = st
+		default:
+			return nil, false, fmt.Errorf("source_type must be %q or %q", model.SubscriptionSourceNative, model.SubscriptionSourceTraffic)
+		}
+	}
+	if sub.SourceType == model.SubscriptionSourceTraffic {
+		return s.createTrafficSource(sub, req)
 	}
 	if sub.ProviderName == "" {
 		sub.ProviderName = sub.Name
@@ -756,8 +1008,72 @@ func (s *SubscriptionService) trafficProviderIDByURL(rawURL string) string {
 	return ""
 }
 
+// createTrafficSource creates a subscription that tracks an EXISTING traffic
+// provider (static/legacy source). It never creates a native proxy-provider
+// entry: the draft config is untouched (draft_changed is always false), the
+// native provider name stays blank, and the traffic provider's own
+// subscription URL remains the only URL source — no duplicate secret storage
+// here. Quota and the reset schedule are inherited from the selected traffic
+// provider unless the request explicitly overrides them; an unknown/empty
+// provider timezone inherits as empty (server-local), never fabricated.
+// Caller holds s.mutateMu.
+func (s *SubscriptionService) createTrafficSource(sub *model.Subscription, req *SubscriptionRequest) (*SubscriptionView, bool, error) {
+	if sub.ProviderName != "" {
+		return nil, false, fmt.Errorf("provider_name must be empty for a traffic-source subscription; the node source is owned by the traffic provider")
+	}
+	if req.URL != nil && strings.TrimSpace(*req.URL) != "" {
+		return nil, false, fmt.Errorf("url is owned by the linked traffic provider; edit it there instead of storing a second copy")
+	}
+	if sub.TrafficProviderID == "" {
+		return nil, false, fmt.Errorf("traffic_provider_id is required for a traffic-source subscription")
+	}
+	tp, err := s.traffic.GetProvider(sub.TrafficProviderID)
+	if err != nil {
+		return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
+	}
+	if err := validateReset(sub); err != nil {
+		return nil, false, err
+	}
+	if _, err := s.subs.GetByName(sub.Name); err == nil {
+		return nil, false, &ErrConflict{fmt.Sprintf("subscription %q already exists", sub.Name)}
+	}
+	if other, err := s.subs.GetByTrafficProvider(sub.TrafficProviderID); err == nil {
+		return nil, false, &ErrConflict{fmt.Sprintf("traffic provider %q is already managed by subscription %q", tp.Name, other.Name)}
+	}
+
+	// Inheritance unless explicitly overridden (pointer-present = explicit).
+	if req.QuotaBytes == nil {
+		sub.QuotaBytes = tp.QuotaBytes
+	}
+	if req.ResetDay == nil {
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute = tp.ResetDay, tp.ResetHour, tp.ResetMinute
+		sub.ResetTimezone = tp.ResetTimezone
+		// An unusable stored timezone must not block adoption: fall back to
+		// server-local semantics (empty timezone), never fabricate a zone.
+		if _, nerr := (ResetPolicy{Day: sub.ResetDay, Hour: sub.ResetHour, Minute: sub.ResetMinute, Timezone: sub.ResetTimezone}).Normalize(); nerr != nil {
+			sub.ResetTimezone = ""
+		}
+	}
+	sub.ProviderName = ""
+	sub.ProviderSource = ""
+
+	// Metadata-only mutation: the draft is not touched, so there is nothing
+	// to roll back. The partial unique index still rejects a concurrent
+	// duplicate adoption as a conflict.
+	if err := s.subs.Create(sub); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") && strings.Contains(err.Error(), "traffic_provider") {
+			return nil, false, &ErrConflict{fmt.Sprintf("traffic provider %q is already managed by another subscription", tp.Name)}
+		}
+		return nil, false, err
+	}
+	v, err := s.View(sub)
+	return v, false, err
+}
+
 // Update mutates metadata; nil fields keep stored values, an empty url keeps
 // the stored secret. Provider rebinding requires the new provider to exist.
+// Traffic sources update metadata-only: no draft mutation, no URL edit (the
+// URL belongs to the traffic provider), source type immutable.
 func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*SubscriptionView, bool, error) {
 	s.mutateMu.Lock()
 	defer s.mutateMu.Unlock()
@@ -766,6 +1082,9 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, false, err
+	}
+	if sub.SourceType == model.SubscriptionSourceTraffic {
+		return s.updateTrafficSource(sub, req)
 	}
 	oldName := sub.Name
 	oldProvider := sub.ProviderName
@@ -822,11 +1141,61 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 	return v, draftChanged, err
 }
 
+// updateTrafficSource mutates a traffic-source subscription's metadata only.
+// The linked traffic provider (and thus the URL authority) may be rebound;
+// inherited quota/reset values are NOT re-derived on rebind — they stay as
+// stored unless explicitly overridden in the request. draft_changed is
+// always false. Caller holds s.mutateMu.
+func (s *SubscriptionService) updateTrafficSource(sub *model.Subscription, req *SubscriptionRequest) (*SubscriptionView, bool, error) {
+	oldName := sub.Name
+	if req.SourceType != nil && strings.TrimSpace(*req.SourceType) != sub.SourceType {
+		return nil, false, fmt.Errorf("source_type cannot be changed after creation")
+	}
+	if err := req.applyTo(sub); err != nil {
+		return nil, false, err
+	}
+	if strings.TrimSpace(sub.Name) == "" {
+		return nil, false, fmt.Errorf("name is required")
+	}
+	if sub.ProviderName != "" {
+		return nil, false, fmt.Errorf("provider_name must be empty for a traffic-source subscription")
+	}
+	if req.URL != nil && strings.TrimSpace(*req.URL) != "" {
+		return nil, false, fmt.Errorf("url is owned by the linked traffic provider; edit it there instead of storing a second copy")
+	}
+	if err := validateReset(sub); err != nil {
+		return nil, false, err
+	}
+	if sub.Name != oldName {
+		if _, err := s.subs.GetByName(sub.Name); err == nil {
+			return nil, false, &ErrConflict{fmt.Sprintf("subscription %q already exists", sub.Name)}
+		}
+	}
+	if sub.TrafficProviderID == "" {
+		return nil, false, fmt.Errorf("traffic_provider_id is required for a traffic-source subscription")
+	}
+	tp, err := s.traffic.GetProvider(sub.TrafficProviderID)
+	if err != nil {
+		return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
+	}
+	if other, err := s.subs.GetByTrafficProvider(sub.TrafficProviderID); err == nil && other.ID != sub.ID {
+		return nil, false, &ErrConflict{fmt.Sprintf("traffic provider %q is already managed by subscription %q", tp.Name, other.Name)}
+	}
+
+	// Metadata-only mutation; the draft config is never touched.
+	if err := s.subs.UpdateMetadata(sub); err != nil {
+		return nil, false, err
+	}
+	v, err := s.View(sub)
+	return v, false, err
+}
+
 // Delete implements the real delete semantics: referenced providers are
 // refused with their references; otherwise the native provider entry is
 // removed from the draft, the metadata row and its score rows are deleted.
 // Shared traffic-provider accounting is not touched. Business groups are
-// never rewritten here.
+// never rewritten here. Traffic sources delete metadata-only: the traffic
+// provider, its historical accounting and all static nodes/groups survive.
 func (s *SubscriptionService) Delete(id string) (map[string]any, error) {
 	s.mutateMu.Lock()
 	defer s.mutateMu.Unlock()
@@ -834,6 +1203,18 @@ func (s *SubscriptionService) Delete(id string) (map[string]any, error) {
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, err
+	}
+	if sub.SourceType == model.SubscriptionSourceTraffic {
+		if err := s.subs.Delete(sub.ID); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"status":                      "deleted",
+			"source_type":                 model.SubscriptionSourceTraffic,
+			"provider_name":               "",
+			"provider_removed_from_draft": false,
+			"draft_changed":               false,
+		}, nil
 	}
 	if sub.ProviderName != "" {
 		refs, err := s.groupsUsingProvider(sub.ProviderName)
@@ -907,6 +1288,9 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 	sub, err := s.subs.Get(id)
 	if err != nil {
 		return nil, &RefreshError{Code: "not_found", Message: "subscription not found"}
+	}
+	if sub.SourceType == model.SubscriptionSourceTraffic {
+		return s.refreshTrafficSource(sub)
 	}
 	now := s.nowFn()
 
@@ -1007,30 +1391,126 @@ func (s *SubscriptionService) Refresh(id string) (*SubscriptionView, *RefreshErr
 	}
 	return v, refErr
 }
+// fetchUserinfo fetches a subscription URL and returns ONLY the header-format
+// payload. Native subscriptions keep their existing behavior: an aggregate
+// JSON payload (or any other non-header body) stays an error, exactly as
+// before the shared vendor fetch existed.
 func (s *SubscriptionService) fetchUserinfo(rawURL string) (*model.TrafficUserinfo, error) {
-	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	snap, err := FetchVendorInfo(s.http, rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid subscription URL")
+		return nil, err
 	}
-	// Vendors gate configs on a clash UA — some return nothing to others.
-	req.Header.Set("User-Agent", "clash.meta")
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return nil, sanitizeURLError("subscription", err)
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, &RateLimitError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("subscription returned HTTP %d", resp.StatusCode)
-	}
-	header := resp.Header.Get("subscription-userinfo")
-	if header == "" {
+	if snap.Info == nil {
 		return nil, fmt.Errorf("no subscription-userinfo header")
 	}
-	return ParseUserinfo(header)
+	return snap.Info, nil
+}
+
+// refreshTrafficSource refreshes a traffic-source subscription's vendor
+// metadata. The URL comes from the linked traffic provider and is never
+// stored, logged or returned; errors are sanitized; a failed fetch keeps the
+// last good snapshot (stale-on-error). A source without a subscription URL
+// refreshes local info successfully with an explicit local-only status and
+// unknown supplier expiry. No native /providers/proxies request is made, no
+// draft mutation happens, and snapshots are never copied across sources.
+func (s *SubscriptionService) refreshTrafficSource(sub *model.Subscription) (*SubscriptionView, *RefreshError) {
+	now := s.nowFn()
+	tp, err := s.traffic.GetProvider(sub.TrafficProviderID)
+	if err != nil {
+		msg := "linked traffic provider no longer exists"
+		s.persistTrafficRefreshFailure(sub.ID, now, msg)
+		return nil, &RefreshError{Code: "source_missing", Message: msg}
+	}
+	fetchURL := tp.SubscriptionURL
+	if fetchURL == "" {
+		// Local-only refresh: succeed with explicit local-only semantics.
+		s.mutateMu.Lock()
+		fresh, gerr := s.subs.Get(sub.ID)
+		if gerr != nil {
+			s.mutateMu.Unlock()
+			return nil, &RefreshError{Code: "internal", Message: gerr.Error()}
+		}
+		fresh.LastRefreshAt = model.NewNullTime(now)
+		fresh.LastSuccessAt = model.NewNullTime(now)
+		fresh.LastRefreshError = ""
+		if uerr := s.subs.UpdateSnapshot(fresh); uerr != nil {
+			s.mutateMu.Unlock()
+			return nil, &RefreshError{Code: "internal", Message: uerr.Error()}
+		}
+		s.mutateMu.Unlock()
+		v, verr := s.View(fresh)
+		if verr != nil {
+			return nil, &RefreshError{Code: "internal", Message: verr.Error()}
+		}
+		return v, nil
+	}
+
+	// Network fetch OUTSIDE the mutation lock.
+	snap, ferr := FetchVendorInfo(s.http, fetchURL)
+	refErr := (*RefreshError)(nil)
+	if ferr != nil {
+		var rl *RateLimitError
+		if errors.As(ferr, &rl) {
+			secs := int(respectRetryAfter(rl.RetryAfter).Seconds())
+			refErr = &RefreshError{Code: "rate_limited", Message: "subscription server rate limited; vendor snapshot kept", RetryAfterSecond: secs}
+		} else {
+			refErr = &RefreshError{Code: "userinfo_failed", Message: "vendor fetch failed: " + sanitizeMessage(ferr)}
+		}
+	}
+
+	// Short critical section: re-validate the source atomically against
+	// rebinds (metadata mutations hold the same lock), then persist ONLY
+	// snapshot/status columns via field-specific SQL updates.
+	s.mutateMu.Lock()
+	fresh, rerr := s.subs.Get(sub.ID)
+	if rerr != nil {
+		s.mutateMu.Unlock()
+		return nil, &RefreshError{Code: "internal", Message: rerr.Error()}
+	}
+	fresh.LastRefreshAt = model.NewNullTime(now)
+	if refErr == nil {
+		stale := true
+		if cur, cerr := s.traffic.GetProvider(fresh.TrafficProviderID); cerr == nil && cur.SubscriptionURL == fetchURL {
+			stale = false
+		}
+		if stale {
+			refErr = &RefreshError{Code: "userinfo_failed", Message: "traffic source changed during refresh; fetched snapshot discarded"}
+			fresh.LastRefreshError = refErr.Message
+		} else {
+			applyVendorSnapshot(fresh, snap, now)
+			fresh.LastSuccessAt = model.NewNullTime(now)
+			fresh.LastRefreshError = ""
+		}
+	} else {
+		fresh.LastRefreshError = refErr.Message
+	}
+	if uerr := s.subs.UpdateSnapshot(fresh); uerr != nil {
+		s.mutateMu.Unlock()
+		return nil, &RefreshError{Code: "internal", Message: uerr.Error()}
+	}
+	s.mutateMu.Unlock()
+
+	v, verr := s.View(fresh)
+	if verr != nil {
+		return nil, &RefreshError{Code: "internal", Message: verr.Error()}
+	}
+	return v, refErr
+}
+
+// persistTrafficRefreshFailure records a sanitized refresh failure without
+// touching any snapshot field (the last good vendor data survives).
+func (s *SubscriptionService) persistTrafficRefreshFailure(id string, now time.Time, msg string) {
+	s.mutateMu.Lock()
+	defer s.mutateMu.Unlock()
+	fresh, err := s.subs.Get(id)
+	if err != nil {
+		return
+	}
+	fresh.LastRefreshAt = model.NewNullTime(now)
+	fresh.LastRefreshError = msg
+	if err := s.subs.UpdateSnapshot(fresh); err != nil {
+		slog.Warn("subscription: traffic-source failure persist failed", "err", err)
+	}
 }
 
 // ── discovery ────────────────────────────────────────────────────────────────

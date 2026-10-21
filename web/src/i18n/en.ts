@@ -445,6 +445,32 @@ export const en = {
   'subscriptions.providerMissing': 'The linked provider is missing from the config draft',
   'subscriptions.providerSourceCreated': 'Created',
   'subscriptions.providerSourceLinked': 'Linked',
+  'subscriptions.sourceType': 'Source type',
+  'subscriptions.sourceTypeNative': 'Native provider',
+  'subscriptions.sourceTypeNativeHint':
+    'Creates or links a native mihomo proxy-provider in the config draft (published via Publish Center).',
+  'subscriptions.sourceTypeTraffic': 'Existing static source',
+  'subscriptions.sourceTypeTrafficHint':
+    'Tracks an existing traffic provider and its static nodes. No native provider is created and the config draft is never touched.',
+  'subscriptions.sourceTypeTrafficBadge': 'Static source',
+  'subscriptions.trafficSource': 'Traffic source',
+  'subscriptions.trafficSourceSelect': 'Select an existing traffic provider…',
+  'subscriptions.trafficProviderRequired': 'Select the traffic provider this source tracks.',
+  'subscriptions.urlManagedByTrafficSource':
+    'The subscription link is owned by the traffic source and stays there; nothing is duplicated here.',
+  'subscriptions.statusLocal': 'Local data',
+  'subscriptions.localOnlyHint':
+    'This source has no subscription link. Showing locally sampled usage only; vendor usage and expiry are unknown.',
+  'subscriptions.supplierResetDayNotice':
+    'Vendor reports reset day {day} (day only — no hour or timezone).',
+  'subscriptions.scheduleConfiguredHint':
+    'Reset time and timezone above are locally configured, not supplied by the vendor.',
+  'subscriptions.nodeCountMatched': 'Matched static nodes',
+  'subscriptions.deleteTitleTraffic': 'Delete Static Source Tracking',
+  'subscriptions.deleteConfirmTraffic':
+    'Delete the tracking record for "{name}"? The traffic source, its history and all static nodes/groups stay untouched.',
+  'subscriptions.pausedUsageHintTraffic':
+    'Automatic metadata refresh is paused. The traffic source and static config are untouched.',
   'subscriptions.localUsed': 'Local accounting this cycle',
   'subscriptions.resetInDays': 'in {days} day(s)',
   'subscriptions.cycleEnds': 'Current cycle ends {time}',
@@ -466,7 +492,7 @@ export const en = {
   'subscriptions.used': 'Used',
   'subscriptions.remaining': 'Remaining',
   'subscriptions.usageSource': 'Usage source',
-  'subscriptions.sourceVendor': 'Vendor (subscription-userinfo)',
+  'subscriptions.sourceVendor': 'Vendor reported',
   'subscriptions.sourceLocal': 'Local accounting',
   'subscriptions.sourceManual': 'Manual',
   'subscriptions.sourceNone': 'No data yet',
