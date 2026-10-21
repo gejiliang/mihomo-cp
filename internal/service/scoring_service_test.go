@@ -758,12 +758,41 @@ func TestStartupWithoutMihomoBinaryThenConfiguredUpdate(t *testing.T) {
 		t.Errorf("missing binary error not visible: code=%q error=%q", failed.ErrorCode, failed.LastError)
 	}
 
-	// A later configured binary must replace the runner path, not keep the
-	// stale empty runner from startup.
+	// A later configured binary must be resolved from current settings, not
+	// keep the stale empty runner from startup.
 	configuredBinary := filepath.Join(t.TempDir(), "mihomo-configured")
-	env.svc.EnsureProber(configuredBinary)
-	if got := env.svc.isolationRunner().Binary; got != configuredBinary {
-		t.Errorf("runner binary = %q, want updated configured path %q", got, configuredBinary)
+	st, err = env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.MihomoBinary = configuredBinary
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+	prober, err := env.svc.currentProber()
+	if err != nil {
+		t.Fatalf("currentProber after binary update: %v", err)
+	}
+	runner, ok := prober.(*MihomoIsolation)
+	if !ok {
+		t.Fatalf("currentProber type = %T, want *MihomoIsolation", prober)
+	}
+	if runner.Binary != configuredBinary {
+		t.Errorf("runner binary = %q, want updated configured path %q", runner.Binary, configuredBinary)
+	}
+
+	secondBinary := filepath.Join(t.TempDir(), "mihomo-configured-2")
+	st.MihomoBinary = secondBinary
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+	prober, err = env.svc.currentProber()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, ok = prober.(*MihomoIsolation)
+	if !ok || runner.Binary != secondBinary {
+		t.Errorf("runner binary after second update = %v, want %q", prober, secondBinary)
 	}
 }
 
@@ -894,5 +923,242 @@ func TestDisabledSubscriptionQueuedJobsDoNotAutoDispatchButManualRefreshDoes(t *
 
 	if got := prober.count("Paused-01"); got != 1 {
 		t.Errorf("manually refreshed paused row dispatches after restart = %d, want 1; targets=%v", got, prober.targets)
+	}
+}
+
+func TestPartialClaudeFailureRetriesMissingSource(t *testing.T) {
+	env := newScoringTestEnv(t)
+	var claudeCalls, lookupCalls int32
+	var claudeFail atomic.Bool
+	claudeFail.Store(true)
+	ip := "203.0.113.10"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/iprisk/" + ip:
+			atomic.AddInt32(&claudeCalls, 1)
+			if claudeFail.Load() {
+				http.Error(w, "temporary claude failure", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ip": ip, "trust_score": 88})
+		case "/api/ip/lookup/" + ip:
+			atomic.AddInt32(&lookupCalls, 1)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ip": ip, "cidr": "203.0.113.0/24", "trust_score": 40,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	env.svc.netcoffeeBase = srv.URL
+
+	res, _, _, err := env.svc.collectScores(context.Background(), srv.Client(), ip, true)
+	if err == nil {
+		t.Fatal("partial Claude failure should retain a visible error")
+	}
+	if res.claudeScore != nil || res.lookupMatch != model.IPMatchExact {
+		t.Fatalf("partial result = %+v, want missing Claude score + successful lookup", res)
+	}
+	if atomic.LoadInt32(&claudeCalls) != 1 || atomic.LoadInt32(&lookupCalls) != 1 {
+		t.Fatalf("first calls claude=%d lookup=%d, want 1/1", claudeCalls, lookupCalls)
+	}
+
+	claudeFail.Store(false)
+	res, _, _, err = env.svc.collectScores(context.Background(), srv.Client(), ip, true)
+	if err != nil {
+		t.Fatalf("retry after Claude recovery: %v", err)
+	}
+	if res.claudeScore == nil || *res.claudeScore != 88 {
+		t.Errorf("retry did not fill the missing Claude source: %+v", res)
+	}
+	if atomic.LoadInt32(&claudeCalls) != 2 {
+		t.Errorf("missing-source retry Claude calls = %d, want 2", claudeCalls)
+	}
+}
+
+func TestConcurrentIdenticalIPScoresCoalesce(t *testing.T) {
+	env := newScoringTestEnv(t)
+	ip := "203.0.113.20"
+	var claudeCalls, lookupCalls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond) // keep both callers overlapping
+		switch r.URL.Path {
+		case "/api/iprisk/" + ip:
+			atomic.AddInt32(&claudeCalls, 1)
+			writeJSON(w, http.StatusOK, map[string]any{"ip": ip, "trust_score": 88})
+		case "/api/ip/lookup/" + ip:
+			atomic.AddInt32(&lookupCalls, 1)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ip": ip, "cidr": "203.0.113.0/24", "trust_score": 40,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	env.svc.netcoffeeBase = srv.URL
+
+	type result struct {
+		res probeResult
+		err error
+	}
+	results := make(chan result, 2)
+	ready := make(chan struct{}, 2)
+	start := make(chan struct{})
+	call := func() {
+		ready <- struct{}{}
+		<-start
+		res, _, _, err := env.svc.collectScores(context.Background(), srv.Client(), ip, true)
+		results <- result{res: res, err: err}
+	}
+	go call()
+	go call()
+	<-ready
+	<-ready
+	close(start)
+	for i := 0; i < 2; i++ {
+		got := <-results
+		if got.err != nil {
+			t.Errorf("concurrent collectScores error: %v", got.err)
+		}
+		if got.res.claudeScore == nil || *got.res.claudeScore != 88 {
+			t.Errorf("concurrent result = %+v, want score 88", got.res)
+		}
+	}
+
+	if got := atomic.LoadInt32(&claudeCalls); got != 1 {
+		t.Errorf("concurrent Claude calls = %d, want 1 (coalesced)", got)
+	}
+	if got := atomic.LoadInt32(&lookupCalls); got != 1 {
+		t.Errorf("concurrent lookup calls = %d, want 1 (coalesced)", got)
+	}
+}
+
+func TestPinGroupSelectionsUsesReadOnlyCurrentMember(t *testing.T) {
+	env := newScoringTestEnv(t)
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method+" "+r.URL.Path)
+		if r.Method != http.MethodGet {
+			t.Errorf("runtime selection mock saw a write: %s %s", r.Method, r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/proxies/Relay-Group":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"name": "Relay-Group", "type": "URLTest", "now": "B",
+				"all": []string{"A", "B"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	st, err := env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.ExtController = srv.URL
+	st.ExtSecret = ""
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ScoringService{settings: env.settings}
+
+	topo := &IsolationTopology{
+		Target: "A",
+		Nodes: []map[string]any{
+			{"name": "A", "type": "ss", "server": "203.0.113.10", "port": 8388},
+			{"name": "B", "type": "ss", "server": "198.51.100.10", "port": 8388},
+		},
+		Groups: []map[string]any{
+			{"name": "Relay-Group", "type": "url-test", "proxies": []string{"A", "B"}},
+		},
+	}
+	if err := svc.pinGroupSelections(topo); err != nil {
+		t.Fatalf("pinGroupSelections: %v", err)
+	}
+	group := topo.Groups[0]
+	if group["type"] != "selector" {
+		t.Errorf("pinned group type = %v, want selector", group["type"])
+	}
+	proxies, ok := group["proxies"].([]string)
+	if !ok || len(proxies) != 1 || proxies[0] != "B" {
+		t.Fatalf("pinned group proxies = %#v, want only B", group["proxies"])
+	}
+	if len(methods) != 1 || methods[0] != "GET /proxies/Relay-Group" {
+		t.Errorf("runtime mock requests = %v, want exactly one GET", methods)
+	}
+	cfg := buildIsolationConfig(topo, 34567, IsolationConfig{})
+	var doc map[string]any
+	if err := yaml.Unmarshal(cfg, &doc); err != nil {
+		t.Fatal(err)
+	}
+	renderedGroups, _ := doc["proxy-groups"].([]any)
+	if len(renderedGroups) != 1 {
+		t.Fatalf("rendered groups = %#v", doc["proxy-groups"])
+	}
+	rendered, _ := renderedGroups[0].(map[string]any)
+	if rendered["type"] != "selector" {
+		t.Errorf("rendered group type = %v, want selector", rendered["type"])
+	}
+	renderedProxies, _ := rendered["proxies"].([]any)
+	if len(renderedProxies) != 1 || renderedProxies[0] != "B" {
+		t.Errorf("rendered group proxies = %#v, want only B", rendered["proxies"])
+	}
+}
+
+func TestPinGroupSelectionsRejectsNoSingleRuntimeChoice(t *testing.T) {
+	env := newScoringTestEnv(t)
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	st, err := env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.ExtController = srv.URL
+	st.ExtSecret = ""
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+	svc := &ScoringService{settings: env.settings}
+
+	topo := &IsolationTopology{
+		Target: "A",
+		Nodes: []map[string]any{
+			{"name": "A", "type": "ss", "server": "203.0.113.10", "port": 8388},
+			{"name": "B", "type": "ss", "server": "198.51.100.10", "port": 8388},
+		},
+		Groups: []map[string]any{
+			{"name": "LB", "type": "load-balance", "proxies": []string{"A", "B"}},
+		},
+	}
+	if err := svc.pinGroupSelections(topo); err == nil {
+		t.Fatal("load-balance group should be rejected, not faked as an actual choice")
+	}
+	if got := atomic.LoadInt32(&requests); got != 0 {
+		t.Errorf("unsupported group caused %d runtime requests, want 0", got)
+	}
+
+	// A supported group type with no current selection is also an explicit
+	// error, never a fabricated actual answer.
+	emptySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		writeJSON(w, http.StatusOK, map[string]any{"name": "Fallback-Group", "type": "Fallback"})
+	}))
+	t.Cleanup(emptySrv.Close)
+	st.ExtController = emptySrv.URL
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+	topo.Groups = []map[string]any{
+		{"name": "Fallback-Group", "type": "fallback", "proxies": []string{"A", "B"}},
+	}
+	if err := svc.pinGroupSelections(topo); err == nil {
+		t.Fatal("group without a current selection should return a visible error")
 	}
 }

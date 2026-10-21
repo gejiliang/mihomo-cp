@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"encoding/json"
+	"fmt"
 
 	"github.com/gejiliang/mihomo-cp/internal/model"
 	"github.com/gejiliang/mihomo-cp/internal/store"
@@ -121,20 +123,25 @@ func newSubscriptionAuthEnv(t *testing.T) *subscriptionAuthEnv {
 
 func intPtr(v int) *int { return &v }
 
-func (e *subscriptionAuthEnv) do(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+func (e *subscriptionAuthEnv) doAs(t *testing.T, token, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
 	if body != "" {
 		reader = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, path, reader)
-	req.Header.Set("Authorization", "Bearer "+e.token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	rec := httptest.NewRecorder()
 	e.srv.mux.ServeHTTP(rec, req)
 	return rec
+}
+
+func (e *subscriptionAuthEnv) do(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return e.doAs(t, e.token, method, path, body)
 }
 
 func assertNoSecrets(t *testing.T, body string) {
@@ -255,5 +262,72 @@ func TestReadonlySubscriptionScoreAndTrafficStatusRemainSafe(t *testing.T) {
 			}
 			assertNoSecrets(t, rec.Body.String())
 		})
+	}
+}
+
+func TestDuplicateProviderCreateAndUpdateConflict(t *testing.T) {
+	env := newSubscriptionAuthEnv(t)
+	admin, err := env.srv.authSvc.GenerateAccessToken("admin-user", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := env.doAs(t, admin, "POST", "/api/subscriptions", `{
+		"name":"Other Sub","url":"https://sub.example.com/other",
+		"provider_name":"other-provider","reset_day":10,"reset_hour":12,"timezone":"Asia/Shanghai"
+	}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create other subscription = %d, want 201; body=%s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Data.ID == "" {
+		t.Fatalf("decode created subscription: %v; body=%s", err, rec.Body.String())
+	}
+
+	// Rebinding an existing subscription to a provider already linked to
+	// another subscription must conflict, not create a second link.
+	rec = env.doAs(t, admin, "PUT", "/api/subscriptions/"+created.Data.ID, `{"provider_name":"example-provider"}`)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("update to already-linked provider = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Creating a second subscription against the same provider without a URL
+	// must also conflict instead of silently sharing it.
+	rec = env.doAs(t, admin, "POST", "/api/subscriptions", `{"name":"Duplicate Link","provider_name":"other-provider"}`)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("duplicate provider link create = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Race two creates for a brand-new provider: exactly one may succeed.
+	statuses := make(chan string, 2)
+	var wg sync.WaitGroup
+	for _, name := range []string{"Race One", "Race Two"} {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			body := `{"name":"` + name + `","url":"https://sub.example.com/race","provider_name":"race-provider","reset_day":10,"reset_hour":12,"timezone":"Asia/Shanghai"}`
+			res := env.doAs(t, admin, "POST", "/api/subscriptions", body)
+			statuses <- fmt.Sprintf("%d %s", res.Code, res.Body.String())
+		}(name)
+	}
+	wg.Wait()
+	close(statuses)
+	createdCount, conflictCount := 0, 0
+	for result := range statuses {
+		switch {
+		case strings.HasPrefix(result, "201 "):
+			createdCount++
+		case strings.HasPrefix(result, "409 "):
+			conflictCount++
+		default:
+			t.Errorf("concurrent duplicate create result = %s, want 201 or 409", result)
+		}
+	}
+	if createdCount != 1 || conflictCount != 1 {
+		t.Errorf("concurrent duplicate provider creates = %d created, %d conflicts; want 1/1", createdCount, conflictCount)
 	}
 }

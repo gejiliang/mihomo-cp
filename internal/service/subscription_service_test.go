@@ -591,3 +591,138 @@ func TestSubscriptionLocalUsageUsesSubscriptionResetAndProviderNodes(t *testing.
 		t.Fatalf("localUsed = %d, want %d (subscription cycle + linked provider nodes only)", got, want)
 	}
 }
+
+type blockingUserinfoServer struct {
+	started     chan struct{}
+	release     chan struct{}
+	header      string
+	startOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newBlockingUserinfoServer(t *testing.T, header string) (*blockingUserinfoServer, *httptest.Server) {
+	t.Helper()
+	h := &blockingUserinfoServer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		header:  header,
+	}
+	srv := httptest.NewServer(h)
+	t.Cleanup(func() {
+		h.releaseNow()
+		srv.Close()
+	})
+	return h, srv
+}
+
+func (h *blockingUserinfoServer) releaseNow() {
+	h.releaseOnce.Do(func() { close(h.release) })
+}
+
+func (h *blockingUserinfoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.startOnce.Do(func() { close(h.started) })
+	<-h.release
+	w.Header().Set("subscription-userinfo", h.header)
+	_, _ = w.Write([]byte(`{}`))
+}
+
+func TestAutoRefreshDoesNotOverwriteConcurrentConfigEdit(t *testing.T) {
+	blocking, srv := newBlockingUserinfoServer(t, "upload=1000; download=2000; total=214748364800")
+	env := newSubscriptionTestEnv(t)
+	view := createRefreshableSubscription(t, env, srv.URL)
+
+	done := make(chan struct{})
+	go func() {
+		env.svc.autoRefreshUserinfo()
+		close(done)
+	}()
+	<-blocking.started
+
+	env.update(t, view.ID, `{
+		"name":"Edited During Refresh","enabled":false,
+		"reset_day":0,"reset_hour":0,"reset_minute":0,"timezone":""
+	}`)
+	blocking.releaseNow()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("autoRefreshUserinfo did not finish")
+	}
+
+	stored, err := env.subs.Get(view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Name != "Edited During Refresh" {
+		t.Errorf("concurrent name edit overwritten: %q", stored.Name)
+	}
+	if stored.Enabled {
+		t.Error("concurrent enabled=false edit overwritten by stale refresh")
+	}
+	if stored.ResetDay != 0 || stored.ResetHour != 0 || stored.ResetMinute != 0 || stored.ResetTimezone != "" {
+		t.Errorf("concurrent reset edit overwritten: day=%d hour=%d minute=%d tz=%q",
+			stored.ResetDay, stored.ResetHour, stored.ResetMinute, stored.ResetTimezone)
+	}
+	// The vendor snapshot itself may still be written; only config fields must
+	// survive. It is acceptable for the refresh result to be skipped entirely.
+	if stored.UserinfoUpload != 0 && stored.UserinfoUpload != 1000 {
+		t.Errorf("unexpected userinfo upload = %d", stored.UserinfoUpload)
+	}
+}
+
+func TestAutoRefreshDoesNotAdoptResultFromOldProviderURL(t *testing.T) {
+	blocking, oldSrv := newBlockingUserinfoServer(t, "upload=111; download=222; total=214748364800")
+	env := newSubscriptionTestEnv(t)
+	view := createRefreshableSubscription(t, env, oldSrv.URL)
+
+	newSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("subscription-userinfo", "upload=999; download=999; total=214748364800")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(newSrv.Close)
+
+	done := make(chan struct{})
+	go func() {
+		env.svc.autoRefreshUserinfo()
+		close(done)
+	}()
+	<-blocking.started
+
+	// Change the provider source while the old request is in flight.
+	env.update(t, view.ID, `{"name":"Edited During Refresh","url":"`+newSrv.URL+`"}`)
+	blocking.releaseNow()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("autoRefreshUserinfo did not finish")
+	}
+
+	stored, err := env.subs.Get(view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.UserinfoUpload == 111 || stored.UserinfoDownload == 222 {
+		t.Errorf("stale old-source result was adopted: upload=%d download=%d", stored.UserinfoUpload, stored.UserinfoDownload)
+	}
+	if stored.Name != "Edited During Refresh" {
+		t.Errorf("concurrent name edit overwritten: %q", stored.Name)
+	}
+}
+
+func TestSubscriptionRefreshPreservesRetryAfter48Hours(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "172800")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	env := newSubscriptionTestEnv(t)
+	view := createRefreshableSubscription(t, env, srv.URL)
+
+	_, refErr := env.svc.Refresh(view.ID)
+	if refErr == nil || refErr.Code != "rate_limited" {
+		t.Fatalf("refresh error = %+v, want rate_limited", refErr)
+	}
+	if refErr.RetryAfterSecond != 172800 {
+		t.Errorf("RetryAfterSecond = %d, want 172800 (48h, not capped at 24h)", refErr.RetryAfterSecond)
+	}
+}
