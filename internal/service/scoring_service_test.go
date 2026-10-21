@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -713,5 +714,185 @@ func TestScanAndEnqueueDetectsProviderCacheChangesWithoutInvalidate(t *testing.T
 	}
 	if _, err := env.scores.Get(sgKey); err != nil {
 		t.Errorf("new provider node SG-01 was not discovered by periodic scan: %v", err)
+	}
+}
+
+func TestStartupWithoutMihomoBinaryThenConfiguredUpdate(t *testing.T) {
+	env := newScoringTestEnv(t)
+	iface := findNonLoopbackInterface(t)
+	st, err := env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.IsolationInterface = iface
+	st.MihomoBinary = "" // startup with no configured runner binary
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup reconciliation must not panic when no runner binary exists.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	env.svc.Run(ctx)
+
+	proxy := env.addStaticProxy(t, "No-Binary-Node")
+	key := store.NewNodeKey("static", "", "No-Binary-Node")
+	if err := env.scores.Upsert(&model.NodeScore{
+		NodeKey: key, Source: "static", NodeName: "No-Binary-Node",
+		Status: model.ScoreStatusPending, Fingerprint: staticFingerprint(proxy),
+		NextDue: model.NewNullTime(env.now),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Missing runner config must surface as a visible row error, not a panic.
+	env.svc.dispatch(context.Background())
+	failed, err := env.scores.Get(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != model.ScoreStatusFailed {
+		t.Errorf("missing binary status = %q, want failed", failed.Status)
+	}
+	if failed.ErrorCode == "" || failed.LastError == "" {
+		t.Errorf("missing binary error not visible: code=%q error=%q", failed.ErrorCode, failed.LastError)
+	}
+
+	// A later configured binary must replace the runner path, not keep the
+	// stale empty runner from startup.
+	configuredBinary := filepath.Join(t.TempDir(), "mihomo-configured")
+	env.svc.EnsureProber(configuredBinary)
+	if got := env.svc.isolationRunner().Binary; got != configuredBinary {
+		t.Errorf("runner binary = %q, want updated configured path %q", got, configuredBinary)
+	}
+}
+
+type recordingErrorProber struct {
+	mu      sync.Mutex
+	targets []string
+}
+
+func (p *recordingErrorProber) Probe(ctx context.Context, topo *IsolationTopology, iso IsolationConfig) (*EgressSession, error) {
+	p.mu.Lock()
+	p.targets = append(p.targets, topo.Target)
+	p.mu.Unlock()
+	return nil, errors.New("intentional test probe failure")
+}
+
+func (p *recordingErrorProber) count(target string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, got := range p.targets {
+		if got == target {
+			n++
+		}
+	}
+	return n
+}
+
+func TestDisabledSubscriptionQueuedJobsDoNotAutoDispatchButManualRefreshDoes(t *testing.T) {
+	env := newScoringTestEnv(t)
+	iface := findNonLoopbackInterface(t)
+	st, err := env.settings.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.IsolationInterface = iface
+	if err := env.settings.Update(st); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := func(path string) map[string]any {
+		return map[string]any{
+			"type": "http", "url": "https://sub.example.com/" + path,
+			"path": path, "interval": 86400,
+		}
+	}
+	env.setDraft(t, map[string]any{"proxy-providers": map[string]any{
+		"PausedProvider": provider("providers/paused.yaml"),
+		"ActiveProvider": provider("providers/active.yaml"),
+	}})
+	env.writeProviderCache(t, "providers/paused.yaml", []map[string]any{
+		scoringTestNode("Paused-01", "203.0.113.10"),
+		scoringTestNode("Paused-02", "203.0.113.11"),
+		scoringTestNode("Paused-03", "203.0.113.12"),
+	})
+	env.writeProviderCache(t, "providers/active.yaml", []map[string]any{
+		scoringTestNode("Active-01", "198.51.100.10"),
+	})
+	if err := env.subs.Create(&model.Subscription{
+		ID: "sub-paused", Name: "Paused Sub", Enabled: false,
+		ProviderName: "PausedProvider", ProviderSource: "created",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.subs.Create(&model.Subscription{
+		ID: "sub-active", Name: "Active Sub", Enabled: true,
+		ProviderName: "ActiveProvider", ProviderSource: "created",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pausedPending := store.NewNodeKey("provider", "PausedProvider", "Paused-01")
+	pausedFailed := store.NewNodeKey("provider", "PausedProvider", "Paused-02")
+	pausedWeeklyOK := store.NewNodeKey("provider", "PausedProvider", "Paused-03")
+	activeKey := store.NewNodeKey("provider", "ActiveProvider", "Active-01")
+	for _, row := range []*model.NodeScore{
+		{NodeKey: pausedPending, Source: "provider", NodeName: "Paused-01", ProviderName: "PausedProvider",
+			Status: model.ScoreStatusPending, NextDue: model.NewNullTime(env.now.Add(-3 * time.Hour))},
+		{NodeKey: pausedFailed, Source: "provider", NodeName: "Paused-02", ProviderName: "PausedProvider",
+			Status: model.ScoreStatusFailed, Attempts: 2, NextDue: model.NewNullTime(env.now.Add(-2 * time.Hour))},
+		{NodeKey: pausedWeeklyOK, Source: "provider", NodeName: "Paused-03", ProviderName: "PausedProvider",
+			Status: model.ScoreStatusOK, NextDue: model.NewNullTime(env.now.Add(-time.Hour))},
+		{NodeKey: activeKey, Source: "provider", NodeName: "Active-01", ProviderName: "ActiveProvider",
+			Fingerprint: NodeFingerprint(scoringTestNode("Active-01", "198.51.100.10")),
+			Status:      model.ScoreStatusPending, NextDue: model.NewNullTime(env.now.Add(-30 * time.Minute))},
+	} {
+		if err := env.scores.Upsert(row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prober := &recordingErrorProber{}
+	env.svc.prober = prober
+	env.svc.dispatch(context.Background())
+
+	if got := prober.count("Paused-01") + prober.count("Paused-02") + prober.count("Paused-03"); got != 0 {
+		t.Fatalf("paused provider nodes were auto-dispatched %d time(s); targets=%v", got, prober.targets)
+	}
+	if got := prober.count("Active-01"); got != 1 {
+		t.Fatalf("active provider row dispatches = %d, want 1; targets=%v", got, prober.targets)
+	}
+	for _, key := range []string{pausedPending, pausedFailed, pausedWeeklyOK} {
+		row, err := env.scores.Get(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row.Status == model.ScoreStatusTesting || row.CheckedAt.Valid {
+			t.Errorf("paused row %s was claimed/checked: status=%s checked=%+v", key, row.Status, row.CheckedAt)
+		}
+	}
+
+	// Explicit manual refresh must requeue the paused row and remain durable
+	// across a service restart.
+	queued, _, _, err := env.svc.RefreshNodes([]string{pausedPending}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != 1 {
+		t.Fatalf("manual refresh queued = %d, want 1", queued)
+	}
+	restarted := NewScoringService(
+		env.scores, env.proxies, env.groups, env.subs, env.configs, env.settings, prober,
+	)
+	restarted.nowFn = func() time.Time { return env.now }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	restarted.Run(ctx)
+	restarted.dispatch(context.Background())
+
+	if got := prober.count("Paused-01"); got != 1 {
+		t.Errorf("manually refreshed paused row dispatches after restart = %d, want 1; targets=%v", got, prober.targets)
 	}
 }

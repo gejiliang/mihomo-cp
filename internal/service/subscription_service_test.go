@@ -541,3 +541,53 @@ func TestSubscriptionDeleteReferencedAndUnreferenced(t *testing.T) {
 		t.Errorf("shared traffic userinfo must be preserved: %v", err)
 	}
 }
+
+func TestSubscriptionLocalUsageUsesSubscriptionResetAndProviderNodes(t *testing.T) {
+	env := newSubscriptionTestEnv(t)
+	tp := &model.TrafficProvider{
+		ID: "tp-local", Name: "Local Traffic", QuotaBytes: 200 * 1024 * 1024 * 1024,
+		ResetDay: 1, ResetHour: 0, ResetMinute: 0, ResetTimezone: "UTC",
+		NodePatternList: []string{"Sub-*"}, Enabled: true,
+	}
+	if err := env.traffic.CreateProvider(tp); err != nil {
+		t.Fatal(err)
+	}
+	view := env.create(t, `{
+		"name":"Local Sub","url":"https://sub.example.com/local",
+		"reset_day":10,"reset_hour":12,"reset_minute":0,"timezone":"Asia/Shanghai",
+		"traffic_provider_id":"tp-local"
+	}`)
+	stored, err := env.subs.Get(view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// now is inside the subscription cycle Oct 10 12:00 - Nov 10 12:00
+	// (Asia/Shanghai), while the linked traffic provider resets on day 1.
+	env.now = time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC)
+	bucket := func(month time.Month, day, hour int) int64 {
+		return time.Date(2026, month, day, hour, 0, 0, 0, time.UTC).Unix()
+	}
+	rows := []model.TrafficHourly{
+		// Traffic-provider cycle (day 1) includes this; the subscription cycle
+		// (day 10 noon) does not.
+		{Bucket: bucket(time.October, 5, 12), Node: "Sub-HK", Upload: 100},
+		// Inside the subscription cycle and matching the provider nodes.
+		{Bucket: bucket(time.October, 12, 12), Node: "Sub-HK", Upload: 10},
+		{Bucket: bucket(time.November, 3, 12), Node: "Sub-JP", Download: 30},
+		// Same cycle but not a linked-provider node.
+		{Bucket: bucket(time.October, 12, 13), Node: "Other-HK", Upload: 1000},
+	}
+	if err := env.traffic.AddHourly(rows); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := env.svc.localUsed(stored, env.now)
+	if !ok {
+		t.Fatal("localUsed returned not-known")
+	}
+	const want = int64(40) // 10 + 30; excludes day-1-only and unmatched node
+	if got != want {
+		t.Fatalf("localUsed = %d, want %d (subscription cycle + linked provider nodes only)", got, want)
+	}
+}

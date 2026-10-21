@@ -138,7 +138,7 @@ func TestNodeScoreStoreQueuePersistence(t *testing.T) {
 		}
 	}
 
-	due, err := store.ListDue(now, 10)
+	due, err := store.ListDue(now, 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestNodeScoreStoreOKRowEligibleAtWeeklyBoundary(t *testing.T) {
 	}
 
 	// A successful row must not be selected before its weekly due time.
-	before, err := scores.ListDue(nextDue.Add(-time.Second), 10)
+	before, err := scores.ListDue(nextDue.Add(-time.Second), 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestNodeScoreStoreOKRowEligibleAtWeeklyBoundary(t *testing.T) {
 	// A new store on the same DB simulates a service restart; the row must
 	// remain eligible based on its persisted next_due, not its status alone.
 	restarted := NewNodeScoreStore(db)
-	due, err := restarted.ListDue(nextDue, 10)
+	due, err := restarted.ListDue(nextDue, 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestNodeScoreStoreListDueComparesAbsoluteTimeAcrossZones(t *testing.T) {
 		}
 	}
 
-	due, err := scores.ListDue(nowLocal, 10)
+	due, err := scores.ListDue(nowLocal, 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestNodeScoreStoreListDueComparesAbsoluteTimeAcrossZones(t *testing.T) {
 	}
 
 	// At the exact future instant in its own zone it becomes due.
-	dueAtFuture, err := scores.ListDue(baseUTC.Add(time.Hour).In(zone), 10)
+	dueAtFuture, err := scores.ListDue(baseUTC.Add(time.Hour).In(zone), 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
