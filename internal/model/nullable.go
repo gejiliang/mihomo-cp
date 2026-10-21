@@ -69,12 +69,24 @@ func (t *NullTime) parse(s string) error {
 	return lastErr
 }
 
-// Value implements driver.Valuer: zero → NULL.
+// utcStampLayout is fixed-width (nanosecond precision, always UTC) so SQLite
+// DATETIME string comparison matches chronological order exactly.
+const utcStampLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// UTCStamp renders a time in the canonical comparison format (always UTC).
+// Use it for every SQL time comparison so parameter and column forms agree.
+func UTCStamp(t time.Time) string {
+	return t.UTC().Format(utcStampLayout)
+}
+
+// Value implements driver.Valuer: zero → NULL, otherwise the canonical UTC
+// stamp. All SQL time comparisons in this codebase pass timestamps through
+// utcStamp too, so stored and compared forms always agree.
 func (t NullTime) Value() (driver.Value, error) {
 	if t.IsZero() {
 		return nil, nil
 	}
-	return t.Time.UTC(), nil
+	return UTCStamp(t.Time), nil
 }
 
 // MarshalJSON renders RFC3339 or null.

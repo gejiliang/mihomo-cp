@@ -93,27 +93,30 @@ func (s *NodeScoreStore) DeleteByProvider(providerName string) error {
 	return nil
 }
 
-// ListDue returns up to limit rows whose next_due has passed and that are not
-// currently being tested, oldest due first.
+// ListDue returns up to limit rows whose next_due has passed, oldest due
+// first. Eligible statuses are pending, failed AND ok: an ok row past its
+// next_due is due for its weekly re-score (pending/testing rows are either
+// not yet claimable or in flight).
 func (s *NodeScoreStore) ListDue(now time.Time, limit int) ([]model.NodeScore, error) {
 	var rows []model.NodeScore
 	err := s.db.Select(&rows,
 		`SELECT * FROM node_scores
-		 WHERE status IN ('pending', 'failed') AND (next_due IS NULL OR next_due <= ?)
-		 ORDER BY next_due ASC LIMIT ?`, now, limit)
+		 WHERE status IN ('pending', 'failed', 'ok') AND (next_due IS NULL OR next_due <= ?)
+		 ORDER BY next_due ASC LIMIT ?`, model.UTCStamp(now), limit)
 	if err != nil {
 		return nil, fmt.Errorf("list due node scores: %w", err)
 	}
 	return rows, nil
 }
 
-// Claim atomically flips a row from pending/failed to testing. Returns false
-// if the row no longer qualifies (e.g. another worker claimed it).
+// Claim atomically flips a claimable row (pending/failed/ok — ok rows are
+// re-claimed for their weekly refresh) to testing. Returns false if the row
+// no longer qualifies (e.g. another worker claimed it).
 func (s *NodeScoreStore) Claim(nodeKey string, now time.Time) (bool, error) {
 	res, err := s.db.Exec(
 		`UPDATE node_scores SET status = 'testing', checked_at = ?, updated_at = ?
-		 WHERE node_key = ? AND status IN ('pending', 'failed')`,
-		now, now, nodeKey,
+		 WHERE node_key = ? AND status IN ('pending', 'failed', 'ok')`,
+		model.UTCStamp(now), model.UTCStamp(now), nodeKey,
 	)
 	if err != nil {
 		return false, fmt.Errorf("claim node score: %w", err)
@@ -127,7 +130,7 @@ func (s *NodeScoreStore) Claim(nodeKey string, now time.Time) (bool, error) {
 func (s *NodeScoreStore) ResetTesting(now time.Time) (int64, error) {
 	res, err := s.db.Exec(
 		`UPDATE node_scores SET status = 'pending', next_due = ?, updated_at = ? WHERE status = 'testing'`,
-		now, now,
+		model.UTCStamp(now), model.UTCStamp(now),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("reset testing node scores: %w", err)
