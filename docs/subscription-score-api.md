@@ -50,11 +50,25 @@ publish flow applies. Vendor rules/DNS/global settings are never imported.
   accounting). Deleting a traffic source removes only the tracking row —
   the traffic provider, its historical accounting and all static
   nodes/groups survive. Quota and the reset schedule are inherited from the
-  selected traffic provider at creation unless explicitly overridden; an
-  unknown/empty provider timezone inherits as empty (server-local). The
-  stored source type cannot be changed afterwards, `url` and
-  `provider_name` are rejected for traffic sources (400), and rebinding to
-  another traffic provider is validated for existence + uniqueness.
+  selected traffic provider at creation **per omitted field**: a partial
+  override (timezone-only, hour-only, minute-only, day-only, quota-only)
+  keeps its value and inherits the rest; explicitly supplied zero/empty
+  values are preserved (quota 0 = unknown, empty timezone = server-local);
+  the final combined policy is validated once, so explicitly invalid values
+  error instead of being replaced by inherited defaults. Rebinding to
+  another traffic provider is validated for existence + uniqueness, and
+  atomically clears every vendor snapshot/status column of the old source
+  (values, flags, expiry, observed reset day, fetch/success/refresh/error
+  timestamps) in the same update that saves the new binding — old-source
+  usage/quota/expiry is never attributed to the new source, while manual
+  supplements (quota/expiry) and the stored reset schedule are preserved
+  unless explicitly edited. The stored source type cannot be changed
+  afterwards, `url` and `provider_name` are rejected for traffic sources
+  (400). Manual and automatic in-flight fetches carry the traffic-provider
+  ID AND URL they were started against and revalidate both afterwards:
+  different providers sharing one URL are different sources, and a delayed
+  result (success or failure) from the old provider is discarded without
+  touching the new source's data or refresh state.
 
 ### Traffic-source vendor payload (aggregate JSON)
 

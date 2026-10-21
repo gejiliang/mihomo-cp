@@ -137,6 +137,39 @@ func (s *SubscriptionStore) UpdateMetadata(sub *model.Subscription) error {
 	return nil
 }
 
+// UpdateMetadataRebind persists metadata AND clears every vendor
+// snapshot/status column in ONE atomic statement. It is used when a
+// traffic-source subscription is rebound to a different traffic provider:
+// vendor data fetched from the old source (directional or aggregate values
+// and flags, totals, expiry, observed reset day, fetch/success/refresh/
+// error/provider-update timestamps) must never be attributed to the new
+// source. Manual supplements (quota_bytes, manual_expire) and the reset
+// schedule travel with the metadata columns and are preserved unless the
+// request explicitly edited them.
+func (s *SubscriptionStore) UpdateMetadataRebind(sub *model.Subscription) error {
+	sub.UpdatedAt = time.Now().UTC()
+	res, err := s.db.Exec(
+		`UPDATE subscriptions SET
+			name = ?, enabled = ?, provider_name = ?, quota_bytes = ?, manual_expire = ?,
+			reset_day = ?, reset_hour = ?, reset_minute = ?, reset_timezone = ?, traffic_provider_id = ?, provider_source = ?, source_type = ?,
+			userinfo_upload = 0, userinfo_download = 0, userinfo_total = 0, userinfo_expire = 0, userinfo_counters = 0,
+			userinfo_is_aggregate = 0, userinfo_aggregate_used = 0, vendor_reset_day = 0,
+			userinfo_fetched_at = NULL, last_refresh_at = NULL, last_success_at = NULL,
+			last_refresh_error = '', last_provider_update = NULL, updated_at = ?
+		WHERE id = ?`,
+		sub.Name, sub.Enabled, sub.ProviderName, sub.QuotaBytes, sub.ManualExpire,
+		sub.ResetDay, sub.ResetHour, sub.ResetMinute, sub.ResetTimezone, sub.TrafficProviderID, sub.ProviderSource, sub.SourceType,
+		sub.UpdatedAt, sub.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update subscription metadata with snapshot reset: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // UpdateSnapshot persists ONLY the vendor snapshot and refresh-status columns.
 // Metadata columns are untouched, so a snapshot write can never overwrite
 // concurrent name/enabled/reset edits. The row's current metadata (including

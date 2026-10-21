@@ -174,6 +174,7 @@ func (s *SubscriptionService) autoRefreshUserinfo() {
 // the draft are never touched. Source re-validation guards rebinds.
 func (s *SubscriptionService) autoRefreshTrafficSource(sub *model.Subscription, tp *model.TrafficProvider) {
 	fetchURL := tp.SubscriptionURL
+	fetchTPID := tp.ID // provider identity AND URL must both survive the fetch
 	snap, err := FetchVendorInfo(s.http, fetchURL) // outside the mutation lock
 	if err != nil {
 		slog.Debug("subscription: auto traffic-source refresh failed", "subscription", sub.Name, "err", err)
@@ -186,8 +187,8 @@ func (s *SubscriptionService) autoRefreshTrafficSource(sub *model.Subscription, 
 		return
 	}
 	cur, cerr := s.traffic.GetProvider(fresh.TrafficProviderID)
-	if cerr != nil || cur.SubscriptionURL != fetchURL {
-		return // source rebound mid-flight: drop the stale-source result
+	if cerr != nil || fresh.TrafficProviderID != fetchTPID || cur.SubscriptionURL != fetchURL {
+		return // rebound mid-flight: even an identical URL is a different source — drop
 	}
 	now := s.nowFn()
 	applyVendorSnapshot(fresh, snap, now)
@@ -1031,6 +1032,38 @@ func (s *SubscriptionService) createTrafficSource(sub *model.Subscription, req *
 	if err != nil {
 		return nil, false, fmt.Errorf("traffic provider %q not found", sub.TrafficProviderID)
 	}
+
+	// Inheritance happens per omitted field so a partial override survives:
+	// an explicit timezone-only / hour-only / minute-only / day-only / quota-
+	// only request keeps its value and inherits the rest. Explicit zero/empty
+	// values are preserved (quota 0 = unknown, empty timezone = server-local,
+	// hour 0 stays 0). The final combined policy is validated once; explicit
+	// invalid values error out instead of being replaced by inherited ones.
+	if req.QuotaBytes != nil {
+		sub.QuotaBytes = *req.QuotaBytes
+	} else {
+		sub.QuotaBytes = tp.QuotaBytes
+	}
+	if req.ResetDay != nil {
+		sub.ResetDay = *req.ResetDay
+	} else {
+		sub.ResetDay = tp.ResetDay
+	}
+	if req.ResetHour != nil {
+		sub.ResetHour = *req.ResetHour
+	} else {
+		sub.ResetHour = tp.ResetHour
+	}
+	if req.ResetMinute != nil {
+		sub.ResetMinute = *req.ResetMinute
+	} else {
+		sub.ResetMinute = tp.ResetMinute
+	}
+	if req.Timezone != nil {
+		sub.ResetTimezone = strings.TrimSpace(*req.Timezone)
+	} else {
+		sub.ResetTimezone = tp.ResetTimezone
+	}
 	if err := validateReset(sub); err != nil {
 		return nil, false, err
 	}
@@ -1041,19 +1074,6 @@ func (s *SubscriptionService) createTrafficSource(sub *model.Subscription, req *
 		return nil, false, &ErrConflict{fmt.Sprintf("traffic provider %q is already managed by subscription %q", tp.Name, other.Name)}
 	}
 
-	// Inheritance unless explicitly overridden (pointer-present = explicit).
-	if req.QuotaBytes == nil {
-		sub.QuotaBytes = tp.QuotaBytes
-	}
-	if req.ResetDay == nil {
-		sub.ResetDay, sub.ResetHour, sub.ResetMinute = tp.ResetDay, tp.ResetHour, tp.ResetMinute
-		sub.ResetTimezone = tp.ResetTimezone
-		// An unusable stored timezone must not block adoption: fall back to
-		// server-local semantics (empty timezone), never fabricate a zone.
-		if _, nerr := (ResetPolicy{Day: sub.ResetDay, Hour: sub.ResetHour, Minute: sub.ResetMinute, Timezone: sub.ResetTimezone}).Normalize(); nerr != nil {
-			sub.ResetTimezone = ""
-		}
-	}
 	sub.ProviderName = ""
 	sub.ProviderSource = ""
 
@@ -1148,6 +1168,7 @@ func (s *SubscriptionService) Update(id string, req *SubscriptionRequest) (*Subs
 // always false. Caller holds s.mutateMu.
 func (s *SubscriptionService) updateTrafficSource(sub *model.Subscription, req *SubscriptionRequest) (*SubscriptionView, bool, error) {
 	oldName := sub.Name
+	oldTPID := sub.TrafficProviderID
 	if req.SourceType != nil && strings.TrimSpace(*req.SourceType) != sub.SourceType {
 		return nil, false, fmt.Errorf("source_type cannot be changed after creation")
 	}
@@ -1182,7 +1203,24 @@ func (s *SubscriptionService) updateTrafficSource(sub *model.Subscription, req *
 		return nil, false, &ErrConflict{fmt.Sprintf("traffic provider %q is already managed by subscription %q", tp.Name, other.Name)}
 	}
 
-	// Metadata-only mutation; the draft config is never touched.
+	if sub.TrafficProviderID != oldTPID {
+		// Provider rebind: atomically save metadata AND clear every vendor
+		// snapshot/status column — old-source usage/quota/expiry/reset-day and
+		// refresh state must never be attributed to the new source. The row is
+		// read back so the returned view reflects the cleared state.
+		if err := s.subs.UpdateMetadataRebind(sub); err != nil {
+			return nil, false, err
+		}
+		fresh, gerr := s.subs.Get(sub.ID)
+		if gerr != nil {
+			return nil, false, gerr
+		}
+		v, verr := s.View(fresh)
+		return v, false, verr
+	}
+
+	// Same-source metadata save: field-specific snapshot safety — vendor data
+	// and refresh state are untouched.
 	if err := s.subs.UpdateMetadata(sub); err != nil {
 		return nil, false, err
 	}
@@ -1418,17 +1456,25 @@ func (s *SubscriptionService) refreshTrafficSource(sub *model.Subscription) (*Su
 	tp, err := s.traffic.GetProvider(sub.TrafficProviderID)
 	if err != nil {
 		msg := "linked traffic provider no longer exists"
-		s.persistTrafficRefreshFailure(sub.ID, now, msg)
+		s.persistTrafficRefreshFailure(sub.ID, sub.TrafficProviderID, now, msg)
 		return nil, &RefreshError{Code: "source_missing", Message: msg}
 	}
 	fetchURL := tp.SubscriptionURL
+	fetchTPID := tp.ID // provider identity AND URL must both survive the fetch
 	if fetchURL == "" {
-		// Local-only refresh: succeed with explicit local-only semantics.
+		// Local-only refresh: succeed with explicit local-only semantics. The
+		// whole branch runs under the mutation lock and re-validates provider
+		// identity: a row rebound before we took the lock is a different
+		// source and must not be marked refreshed from this attempt.
 		s.mutateMu.Lock()
 		fresh, gerr := s.subs.Get(sub.ID)
 		if gerr != nil {
 			s.mutateMu.Unlock()
 			return nil, &RefreshError{Code: "internal", Message: gerr.Error()}
+		}
+		if fresh.TrafficProviderID != fetchTPID {
+			s.mutateMu.Unlock()
+			return nil, &RefreshError{Code: "userinfo_failed", Message: "traffic source changed during refresh; retry"}
 		}
 		fresh.LastRefreshAt = model.NewNullTime(now)
 		fresh.LastSuccessAt = model.NewNullTime(now)
@@ -1459,28 +1505,35 @@ func (s *SubscriptionService) refreshTrafficSource(sub *model.Subscription) (*Su
 	}
 
 	// Short critical section: re-validate the source atomically against
-	// rebinds (metadata mutations hold the same lock), then persist ONLY
-	// snapshot/status columns via field-specific SQL updates.
+	// rebinds (metadata mutations hold the same lock) — BOTH provider id and
+	// URL, since different providers sharing a URL are still different
+	// sources. A stale attempt touches neither snapshot nor refresh state;
+	// nothing is persisted for a row that rebinds mid-flight.
 	s.mutateMu.Lock()
 	fresh, rerr := s.subs.Get(sub.ID)
 	if rerr != nil {
 		s.mutateMu.Unlock()
 		return nil, &RefreshError{Code: "internal", Message: rerr.Error()}
 	}
+	sourceChanged := false
+	if cur, cerr := s.traffic.GetProvider(fresh.TrafficProviderID); cerr != nil || fresh.TrafficProviderID != fetchTPID || cur.SubscriptionURL != fetchURL {
+		sourceChanged = true
+	}
+	if sourceChanged {
+		// The result (success or failure) belongs to a source this row no
+		// longer manages: drop it entirely instead of writing old-source data
+		// or old-source failure state onto the new source.
+		s.mutateMu.Unlock()
+		if refErr == nil {
+			refErr = &RefreshError{Code: "userinfo_failed", Message: "traffic source changed during refresh; fetched result discarded"}
+		}
+		return nil, refErr
+	}
 	fresh.LastRefreshAt = model.NewNullTime(now)
 	if refErr == nil {
-		stale := true
-		if cur, cerr := s.traffic.GetProvider(fresh.TrafficProviderID); cerr == nil && cur.SubscriptionURL == fetchURL {
-			stale = false
-		}
-		if stale {
-			refErr = &RefreshError{Code: "userinfo_failed", Message: "traffic source changed during refresh; fetched snapshot discarded"}
-			fresh.LastRefreshError = refErr.Message
-		} else {
-			applyVendorSnapshot(fresh, snap, now)
-			fresh.LastSuccessAt = model.NewNullTime(now)
-			fresh.LastRefreshError = ""
-		}
+		applyVendorSnapshot(fresh, snap, now)
+		fresh.LastSuccessAt = model.NewNullTime(now)
+		fresh.LastRefreshError = ""
 	} else {
 		fresh.LastRefreshError = refErr.Message
 	}
@@ -1498,12 +1551,14 @@ func (s *SubscriptionService) refreshTrafficSource(sub *model.Subscription) (*Su
 }
 
 // persistTrafficRefreshFailure records a sanitized refresh failure without
-// touching any snapshot field (the last good vendor data survives).
-func (s *SubscriptionService) persistTrafficRefreshFailure(id string, now time.Time, msg string) {
+// touching any snapshot field (the last good vendor data survives). The
+// write is guarded by the traffic-provider identity the failure belonged
+// to: a row rebound meanwhile must not inherit the old source's failure.
+func (s *SubscriptionService) persistTrafficRefreshFailure(id, trafficProviderID string, now time.Time, msg string) {
 	s.mutateMu.Lock()
 	defer s.mutateMu.Unlock()
 	fresh, err := s.subs.Get(id)
-	if err != nil {
+	if err != nil || fresh.TrafficProviderID != trafficProviderID {
 		return
 	}
 	fresh.LastRefreshAt = model.NewNullTime(now)
