@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ProxiesPage from './proxies';
@@ -89,6 +90,47 @@ describe('ProxiesPage node inventory', () => {
     expect(screen.getByText('Demo Provider: 1')).toBeInTheDocument();
     expect(screen.getByText('Broken Provider: Unknown')).toBeInTheDocument();
     expect(screen.queryByText('Broken Provider: 0')).not.toBeInTheDocument();
+  });
+
+  it('shows human-readable source labels in the collapsed trigger, never internal values', async () => {
+    const specialProvider: RuntimeProxyProvider = {
+      ...LOADED_PROVIDER,
+      name: 'Demo Provider / 香港 + #1',
+      nodes: [
+        {
+          ...LOADED_PROVIDER.nodes![0],
+          id: 'provider/Demo%20Provider%20%2F%20%E9%A6%99%E6%B8%AF%20%2B%20%231/Demo%20HK%20%2F%2001',
+          provider: 'Demo Provider / 香港 + #1',
+        },
+      ],
+    };
+    proxyProviders.mockResolvedValue({ data: { providers: [LOADED_PROVIDER, specialProvider] } });
+    const user = userEvent.setup();
+    renderPage();
+
+    // Wait until the provider inventory is loaded and rendered.
+    await screen.findAllByText('Demo HK / 01');
+
+    // Source is the first combobox on the page (source, protocol, country).
+    const sourceTrigger = screen.getAllByRole('combobox')[0];
+    expect(within(sourceTrigger).getByText('All sources')).toBeInTheDocument();
+    expect(sourceTrigger).not.toHaveTextContent('__all__');
+
+    // Static source: label, not the internal marker.
+    await user.click(sourceTrigger);
+    await user.click(await screen.findByRole('option', { name: 'Static' }));
+    expect(sourceTrigger).toHaveTextContent('Static');
+    expect(sourceTrigger).not.toHaveTextContent('__static__');
+
+    // Provider source with spaces, non-ASCII and special characters: the raw
+    // `provider:<name>` value never shows, and the name is not URL-encoded.
+    await user.click(sourceTrigger);
+    await user.click(
+      await screen.findByRole('option', { name: 'Demo Provider / 香港 + #1' })
+    );
+    expect(sourceTrigger).toHaveTextContent('Demo Provider / 香港 + #1');
+    expect(sourceTrigger).not.toHaveTextContent('provider:');
+    expect(sourceTrigger).not.toHaveTextContent('%20');
   });
 
   it('retries the subscription inventory without touching the static list', async () => {
