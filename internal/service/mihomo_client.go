@@ -155,6 +155,18 @@ func (c *MihomoClient) RefreshProvider(name string) error {
 	return err
 }
 
+// GetProxyProviders returns raw JSON from GET /providers/proxies. The raw
+// response contains only runtime proxy metadata (mihomo does not include node
+// credentials); callers still project it through an allow-list before serving
+// it to clients.
+func (c *MihomoClient) GetProxyProviders() (json.RawMessage, error) {
+	data, err := c.do(http.MethodGet, "/providers/proxies", nil)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}
+
 // RefreshProxyProvider sends PUT /providers/proxies/:name to refresh a native
 // PROXY provider (subscription). The rule-provider endpoint answers 404 for
 // proxy providers, so subscription refresh must use this distinct method.

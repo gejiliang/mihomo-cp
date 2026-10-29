@@ -105,6 +105,23 @@ func (h *RuntimeHandler) Providers(w http.ResponseWriter, r *http.Request) {
 	JSON(w, 200, json.RawMessage(data))
 }
 
+// ProxyProviders handles GET /api/runtime/proxy-providers: the read-only
+// inventory of native proxy-provider (subscription) nodes, projected to safe
+// metadata only (no provider URL, server address or node credential).
+func (h *RuntimeHandler) ProxyProviders(w http.ResponseWriter, r *http.Request) {
+	raw, err := h.mihomo.GetProxyProviders()
+	if err != nil {
+		Error(w, 502, "upstream_error", err.Error())
+		return
+	}
+	inventory, err := service.BuildProxyProviderInventory(raw)
+	if err != nil {
+		Error(w, 502, "upstream_error", err.Error())
+		return
+	}
+	JSON(w, 200, inventory)
+}
+
 // RefreshProvider handles PUT /api/runtime/providers/rules/{name}
 func (h *RuntimeHandler) RefreshProvider(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PencilIcon, CopyIcon, Trash2Icon, ActivityIcon, LoaderIcon } from 'lucide-react';
+import {
+  PencilIcon,
+  CopyIcon,
+  Trash2Icon,
+  ActivityIcon,
+  LoaderIcon,
+  InfoIcon,
+} from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -12,19 +19,27 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/shared/confirm-dialog';
+import { NodeDetailsDialog } from '@/components/proxies/node-details-dialog';
 import type { Proxy } from '@/api/proxies';
 import { proxiesApi } from '@/api/proxies';
+import type { RuntimeProxyProvider } from '@/api/runtime';
 import { runtimeApi } from '@/api/runtime';
+import { protocolLabel, type NodeRow } from '@/lib/node-inventory';
 import { useT } from '@/i18n';
 
 interface ProxyListProps {
-  proxies: Proxy[];
+  /** Unified static + subscription node rows, already filtered by the page. */
+  rows: NodeRow[];
+  providers: RuntimeProxyProvider[];
   onEdit: (proxy: Proxy) => void;
   onDeleted: () => void;
   onCopied: () => void;
   testAllTrigger?: number;
   onTestAllDone?: () => void;
+  emptyMessage?: string;
 }
+
+type DelayState = number | 'testing' | 'timeout' | 'error';
 
 const TYPE_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
   ss: 'default',
@@ -35,6 +50,7 @@ const TYPE_VARIANT: Record<string, 'default' | 'secondary' | 'outline'> = {
   socks5: 'outline',
   hysteria2: 'default',
   tuic: 'secondary',
+  anytls: 'default',
 };
 
 const COUNTRY_FLAG: Record<string, string> = {
@@ -60,26 +76,43 @@ function countryDisplay(code: string): string {
   return flag ? `${flag} ${code}` : code;
 }
 
-export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger, onTestAllDone }: ProxyListProps) {
+export function ProxyList({
+  rows,
+  providers,
+  onEdit,
+  onDeleted,
+  onCopied,
+  testAllTrigger,
+  onTestAllDone,
+  emptyMessage,
+}: ProxyListProps) {
   const t = useT();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDescription, setConfirmDescription] = useState('');
-  const [delays, setDelays] = useState<Record<string, number | 'testing' | 'timeout' | 'error'>>({});
+  const [delays, setDelays] = useState<Record<string, DelayState>>({});
+  const [detailsRow, setDetailsRow] = useState<NodeRow | null>(null);
   const testAllRef = useRef(0);
 
-  const testOneDelay = async (proxy: Proxy) => {
-    setDelays((prev) => ({ ...prev, [proxy.id]: 'testing' }));
+  const providerFor = (row: NodeRow): RuntimeProxyProvider | null =>
+    row.kind === 'provider'
+      ? providers.find((provider) => provider.name === row.providerName) ?? null
+      : null;
+
+  const testOneDelay = async (row: NodeRow) => {
+    setDelays((prev) => ({ ...prev, [row.key]: 'testing' }));
     try {
-      const res = await runtimeApi.proxyDelay(proxy.name);
+      // The runtime name is the real node name (subscription nodes included),
+      // never the row id or the provider name.
+      const res = await runtimeApi.proxyDelay(row.name);
       const delay = res?.data?.delay;
       if (typeof delay === 'number' && delay > 0) {
-        setDelays((prev) => ({ ...prev, [proxy.id]: delay }));
+        setDelays((prev) => ({ ...prev, [row.key]: delay }));
       } else {
-        setDelays((prev) => ({ ...prev, [proxy.id]: 'timeout' }));
+        setDelays((prev) => ({ ...prev, [row.key]: 'timeout' }));
       }
     } catch {
-      setDelays((prev) => ({ ...prev, [proxy.id]: 'error' }));
+      setDelays((prev) => ({ ...prev, [row.key]: 'error' }));
     }
   };
 
@@ -87,7 +120,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
   useEffect(() => {
     if (!testAllTrigger || testAllTrigger === testAllRef.current) return;
     testAllRef.current = testAllTrigger;
-    Promise.all(proxies.map((p) => testOneDelay(p))).then(() => onTestAllDone?.());
+    Promise.all(rows.map((row) => testOneDelay(row))).then(() => onTestAllDone?.());
   }, [testAllTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDeleteClick = async (proxy: Proxy) => {
@@ -131,10 +164,10 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
     }
   };
 
-  if (proxies.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        {t('proxies.noProxies')}
+        {emptyMessage ?? t('proxies.noProxies')}
       </div>
     );
   }
@@ -145,6 +178,7 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
         <TableHeader>
           <TableRow>
             <TableHead>{t('common.name')}</TableHead>
+            <TableHead>{t('proxies.source')}</TableHead>
             <TableHead>{t('proxies.country')}</TableHead>
             <TableHead>{t('common.type')}</TableHead>
             <TableHead>{t('proxies.server')}</TableHead>
@@ -153,21 +187,33 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
           </TableRow>
         </TableHeader>
         <TableBody>
-          {proxies.map((proxy) => {
-            const server = proxy.config.server ? String(proxy.config.server) : '—';
-            const port = proxy.config.port ? String(proxy.config.port) : '';
-            const serverDisplay = port ? `${server}:${port}` : server;
-            const variant = TYPE_VARIANT[proxy.type] ?? 'outline';
-            const delay = delays[proxy.id];
+          {rows.map((row) => {
+            const isStatic = row.kind === 'static';
+            const proxy = row.proxy;
+            const variant = TYPE_VARIANT[row.protocol] ?? 'outline';
+            const delay = delays[row.key] ?? row.delay ?? null;
 
             return (
-              <TableRow key={proxy.id} className="cursor-pointer" onClick={() => onEdit(proxy)}>
-                <TableCell className="font-medium">{proxy.name}</TableCell>
-                <TableCell className="text-sm">{countryDisplay(proxy.country)}</TableCell>
-                <TableCell>
-                  <Badge variant={variant}>{proxy.type}</Badge>
+              <TableRow
+                key={row.key}
+                className={isStatic ? 'cursor-pointer' : undefined}
+                onClick={isStatic && proxy ? () => onEdit(proxy) : undefined}
+              >
+                <TableCell className="font-medium">{row.name}</TableCell>
+                <TableCell className="text-sm">
+                  {isStatic ? (
+                    <Badge variant="outline">{t('proxies.sourceStatic')}</Badge>
+                  ) : (
+                    <Badge variant="secondary" title={t('proxies.readOnly')} className="max-w-[180px]">
+                      <span className="truncate">{row.providerName}</span>
+                    </Badge>
+                  )}
                 </TableCell>
-                <TableCell className="text-muted-foreground">{serverDisplay}</TableCell>
+                <TableCell className="text-sm">{isStatic ? countryDisplay(row.country) : '—'}</TableCell>
+                <TableCell>
+                  <Badge variant={variant}>{protocolLabel(row.protocol)}</Badge>
+                </TableCell>
+                <TableCell className="text-muted-foreground">{row.server}</TableCell>
                 <TableCell className="text-sm" onClick={(e) => e.stopPropagation()}>
                   {delay === 'testing' ? (
                     <LoaderIcon className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
@@ -188,36 +234,51 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => testOneDelay(proxy)}
+                      onClick={() => testOneDelay(row)}
                       disabled={delay === 'testing'}
                       title={t('proxies.testDelay')}
                     >
                       <ActivityIcon className="h-3.5 w-3.5" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => onEdit(proxy)}
-                      title={t('common.edit')}
-                    >
-                      <PencilIcon />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => handleCopy(proxy)}
-                      title={t('common.copy')}
-                    >
-                      <CopyIcon />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => handleDeleteClick(proxy)}
-                      title={t('common.delete')}
-                    >
-                      <Trash2Icon />
-                    </Button>
+                    {isStatic && proxy ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => onEdit(proxy)}
+                          title={t('common.edit')}
+                        >
+                          <PencilIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => handleCopy(proxy)}
+                          title={t('common.copy')}
+                        >
+                          <CopyIcon />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => handleDeleteClick(proxy)}
+                          title={t('common.delete')}
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </>
+                    ) : (
+                      // Subscription nodes are read-only: only delay testing and
+                      // safe metadata details; no edit/copy/delete/reorder.
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => setDetailsRow(row)}
+                        title={t('proxies.details')}
+                      >
+                        <InfoIcon />
+                      </Button>
+                    )}
                   </div>
                 </TableCell>
               </TableRow>
@@ -233,6 +294,15 @@ export function ProxyList({ proxies, onEdit, onDeleted, onCopied, testAllTrigger
         description={confirmDescription}
         onConfirm={handleDeleteConfirm}
         variant="destructive"
+      />
+
+      <NodeDetailsDialog
+        row={detailsRow}
+        provider={detailsRow ? providerFor(detailsRow) : null}
+        open={detailsRow !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetailsRow(null);
+        }}
       />
     </>
   );

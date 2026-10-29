@@ -6,7 +6,7 @@
 
 ## 功能特性
 
-- **代理节点管理** — 创建、编辑、删除、复制、排序代理节点（ss、vmess、vless、trojan、hysteria2、tuic 等），自动检测出口国家，支持单个和批量延迟测试
+- **代理节点管理** — 创建、编辑、删除、复制、排序代理节点（ss、vmess、vless、trojan、hysteria2、tuic 等），自动检测出口国家，支持单个和批量延迟测试。同一页面同时列出所有原生 `proxy-providers` 订阅节点（只读），按来源打标/筛选，协议筛选包含 AnyTLS，仅展示安全运行态元信息（不含 URL、服务地址或凭据），支持单节点与批量延迟测试。订阅节点不提供编辑/复制/删除/拖动排序，也不会复制进静态表；provider 加载失败或未知时明确显示「未知」（不伪装 0），静态节点仍可正常使用
 - **策略组管理** — Selector、URLTest、Fallback、LoadBalance、Relay 类型策略组，支持拖拽排序成员
 - **规则与规则集** — 完整的规则 CRUD（类型/匹配值/目标），规则集提供者管理
 - **系统配置** — 通用设置、TUN、DNS、外部控制器等结构化配置界面
@@ -142,6 +142,7 @@ web/
 | GET    | `/runtime/proxies`                | 运行中的代理状态          |
 | GET    | `/runtime/rules`                  | 运行中的规则              |
 | GET    | `/runtime/providers`              | 运行中的规则集            |
+| GET    | `/runtime/proxy-providers`        | 原生 proxy-providers 订阅节点安全只读清单 |
 | GET    | `/settings`                       | 应用设置                  |
 | PUT    | `/settings`                       | 更新应用设置              |
 | GET    | `/settings/config-yaml`           | 获取配置 YAML（草稿或文件）|
