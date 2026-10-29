@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
-import { PlusIcon, ActivityIcon, LoaderIcon, ShieldCheckIcon } from 'lucide-react';
+import {
+  PlusIcon,
+  ActivityIcon,
+  LoaderIcon,
+  ShieldCheckIcon,
+  AlertTriangleIcon,
+  RefreshCwIcon,
+} from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -15,16 +24,34 @@ import { ProxyList } from '@/components/proxies/proxy-list';
 import { ProxyForm } from '@/components/proxies/proxy-form';
 import type { Proxy } from '@/api/proxies';
 import { proxiesApi } from '@/api/proxies';
+import type { RuntimeProxyProvider } from '@/api/runtime';
+import { runtimeApi } from '@/api/runtime';
+import {
+  ALL_SOURCES,
+  STATIC_SOURCE,
+  buildNodeRows,
+  countryOptions,
+  filterNodeRows,
+  protocolLabel,
+  protocolOptions,
+  providerSource,
+  providerSummaries,
+} from '@/lib/node-inventory';
 import { useT } from '@/i18n';
-
-const PROXY_TYPES = ['ss', 'trojan', 'vmess', 'vless', 'http', 'socks5', 'hysteria2', 'tuic'];
 
 export default function ProxiesPage() {
   const t = useT();
+  // Static (database) proxies: editable CRUD list.
   const [proxies, setProxies] = useState<Proxy[]>([]);
+  // Native proxy-provider (subscription) nodes: read-only runtime inventory.
+  const [providers, setProviders] = useState<RuntimeProxyProvider[]>([]);
   const [loading, setLoading] = useState(false);
+  const [staticError, setStaticError] = useState(false);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [providersError, setProvidersError] = useState(false);
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');
+  const [protocolFilter, setProtocolFilter] = useState('');
+  const [sourceFilter, setSourceFilter] = useState(ALL_SOURCES);
   const [countryFilter, setCountryFilter] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editingProxy, setEditingProxy] = useState<Proxy | undefined>(undefined);
@@ -34,21 +61,68 @@ export default function ProxiesPage() {
   const fetchProxies = useCallback(async () => {
     setLoading(true);
     try {
-      const params: { search?: string; type?: string } = {};
-      if (search) params.search = search;
-      if (typeFilter) params.type = typeFilter;
-      const res = await proxiesApi.list(params);
+      // Filtering (static and subscription nodes) happens client-side so both
+      // sources obey the same search/protocol/source filters.
+      const res = await proxiesApi.list();
       setProxies(res.data ?? []);
+      setStaticError(false);
     } catch {
+      setStaticError(true);
       toast.error(t('proxies.loadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [search, typeFilter]);
+  }, [t]);
+
+  const fetchProviders = useCallback(async () => {
+    setProvidersLoading(true);
+    try {
+      const res = await runtimeApi.proxyProviders();
+      setProviders(res.data?.providers ?? []);
+      setProvidersError(false);
+    } catch {
+      // Provider failure must not hide or block the static list.
+      setProviders([]);
+      setProvidersError(true);
+    } finally {
+      setProvidersLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     fetchProxies();
-  }, [fetchProxies]);
+    fetchProviders();
+    // Load once on mount; CRUD actions and the retry button refetch explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const allRows = useMemo(() => buildNodeRows(proxies, providers), [proxies, providers]);
+  const rows = useMemo(
+    () =>
+      filterNodeRows(allRows, {
+        search,
+        protocol: protocolFilter,
+        source: sourceFilter,
+        country: countryFilter,
+      }),
+    [allRows, search, protocolFilter, sourceFilter, countryFilter]
+  );
+
+  const summaries = useMemo(() => providerSummaries(providers), [providers]);
+  const selectedProvider = providers.find((p) => sourceFilter === providerSource(p.name));
+  const hasFilters =
+    search.trim() !== '' ||
+    protocolFilter !== '' ||
+    countryFilter !== '' ||
+    sourceFilter !== ALL_SOURCES;
+  const emptyMessage =
+    selectedProvider && selectedProvider.status !== 'ok'
+      ? t('proxies.providerUnknown')
+      : hasFilters
+        ? t('proxies.noMatchingNodes')
+        : staticError
+          ? t('proxies.loadFailed')
+          : t('proxies.noProxies');
 
   const handleAddClick = () => {
     setEditingProxy(undefined);
@@ -110,7 +184,27 @@ export default function ProxiesPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      {providersError && (
+        <Alert variant="destructive">
+          <AlertTriangleIcon />
+          <AlertTitle>{t('proxies.providerLoadFailed')}</AlertTitle>
+          <AlertDescription>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>{t('proxies.providerLoadFailedDesc')}</span>
+              <Button variant="outline" size="sm" onClick={fetchProviders} disabled={providersLoading}>
+                {providersLoading ? (
+                  <LoaderIcon className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCwIcon className="h-3.5 w-3.5" />
+                )}
+                {t('proxies.retry')}
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="flex items-center gap-2 flex-wrap">
         <Input
           type="text"
           placeholder={t('proxies.searchPlaceholder')}
@@ -119,17 +213,34 @@ export default function ProxiesPage() {
           className="max-w-xs"
         />
         <Select
-          value={typeFilter}
-          onValueChange={(v) => setTypeFilter(!v || v === '__all__' ? '' : v)}
+          value={sourceFilter}
+          onValueChange={(v) => setSourceFilter(v || ALL_SOURCES)}
+        >
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder={t('proxies.sourceAll')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_SOURCES}>{t('proxies.sourceAll')}</SelectItem>
+            <SelectItem value={STATIC_SOURCE}>{t('proxies.sourceStatic')}</SelectItem>
+            {providers.map((p) => (
+              <SelectItem key={p.name} value={providerSource(p.name)}>
+                {p.status === 'ok' ? p.name : `${p.name} · ${t('proxies.unknown')}`}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={protocolFilter}
+          onValueChange={(v) => setProtocolFilter(!v || v === '__all__' ? '' : v)}
         >
           <SelectTrigger className="w-40">
             <SelectValue placeholder={t('common.allTypes')} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">{t('common.allTypes')}</SelectItem>
-            {PROXY_TYPES.map((pt) => (
+            {protocolOptions(allRows).map((pt) => (
               <SelectItem key={pt} value={pt}>
-                {pt}
+                {protocolLabel(pt)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -143,7 +254,7 @@ export default function ProxiesPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">{t('proxies.allCountries')}</SelectItem>
-            {[...new Set(proxies.map((p) => p.country).filter(Boolean))].sort().map((c) => (
+            {countryOptions(allRows).map((c) => (
               <SelectItem key={c} value={c}>
                 {c}
               </SelectItem>
@@ -152,16 +263,32 @@ export default function ProxiesPage() {
         </Select>
       </div>
 
-      {loading ? (
+      {summaries.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {summaries.map((s) => (
+            <Badge
+              key={s.name}
+              variant={s.status === 'ok' ? 'secondary' : 'destructive'}
+              title={s.status === 'ok' ? t('proxies.providerStatusOK') : t('proxies.providerUnknown')}
+            >
+              {s.name}: {s.nodeCount === null ? t('proxies.unknown') : s.nodeCount}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      {loading && allRows.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">{t('common.loading')}</div>
       ) : (
         <ProxyList
-          proxies={countryFilter ? proxies.filter((p) => p.country === countryFilter) : proxies}
+          rows={rows}
+          providers={providers}
           onEdit={handleEditClick}
           onDeleted={fetchProxies}
           onCopied={fetchProxies}
           testAllTrigger={testAllTrigger}
           onTestAllDone={() => setTestingAll(false)}
+          emptyMessage={emptyMessage}
         />
       )}
 

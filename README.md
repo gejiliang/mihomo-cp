@@ -6,7 +6,7 @@ Web-based management panel for [mihomo](https://github.com/MetaCubeX/mihomo) pro
 
 ## Features
 
-- **Proxy Management** — Create, edit, delete, copy, and reorder proxy nodes (ss, vmess, vless, trojan, hysteria2, tuic, etc.) with auto country detection and per-proxy latency testing
+- **Proxy Management** — Create, edit, delete, copy, and reorder proxy nodes (ss, vmess, vless, trojan, hysteria2, tuic, etc.) with auto country detection and per-proxy latency testing. The same page lists every node of the native `proxy-providers` subscriptions (read-only) with source labels/filtering, a protocol filter that includes AnyTLS, safe runtime metadata only (no URL, server address or credentials), and per-node/batch latency tests. Subscription nodes are never editable, copyable, deletable or reorderable, and are never copied into the static table; a provider that fails to load is shown as unknown (never 0) while the static list stays usable
 - **Proxy Groups** — Selector, URLTest, Fallback, LoadBalance, Relay groups with drag-sort members
 - **Rules & Rule Providers** — Full rule CRUD with type/payload/target, rule-set provider management
 - **System Config** — General, TUN, DNS, External Controller settings via structured UI
@@ -142,6 +142,8 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | GET    | `/runtime/proxies`                | Running proxy status       |
 | GET    | `/runtime/rules`                  | Running rules              |
 | GET    | `/runtime/providers`              | Running providers          |
+| GET    | `/runtime/proxy-providers`        | Native proxy-provider (subscription) nodes — safe read-only inventory |
+| GET    | `/runtime/proxy-providers/{provider}/{node}/healthcheck` | Provider-scoped subscription node delay test (only the delay is returned) |
 | GET    | `/settings`                       | App settings               |
 | PUT    | `/settings`                       | Update app settings        |
 | GET    | `/settings/config-yaml`           | Get config YAML (draft or file) |

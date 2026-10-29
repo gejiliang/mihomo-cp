@@ -155,6 +155,44 @@ func (c *MihomoClient) RefreshProvider(name string) error {
 	return err
 }
 
+// GetProxyProviders returns raw JSON from GET /providers/proxies. The raw
+// response contains only runtime proxy metadata (mihomo does not include node
+// credentials); callers still project it through an allow-list before serving
+// it to clients.
+func (c *MihomoClient) GetProxyProviders() (json.RawMessage, error) {
+	data, err := c.do(http.MethodGet, "/providers/proxies", nil)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}
+
+// ProviderNodeHealthcheck sends GET /providers/proxies/:provider/:node/healthcheck
+// to test one native provider node. Provider and node are path-escaped
+// separately, so same-named nodes under different providers address distinct
+// upstream paths and names containing "/", spaces or "#" stay in one segment.
+// Only the reported delay is returned; the raw upstream body is never exposed.
+func (c *MihomoClient) ProviderNodeHealthcheck(provider, node, testURL string, timeout int) (int, error) {
+	q := url.Values{}
+	if testURL != "" {
+		q.Set("url", testURL)
+	}
+	q.Set("timeout", fmt.Sprintf("%d", timeout))
+	path := fmt.Sprintf("/providers/proxies/%s/%s/healthcheck?%s",
+		url.PathEscape(provider), url.PathEscape(node), q.Encode())
+	data, err := c.do(http.MethodGet, path, nil)
+	if err != nil {
+		return 0, err
+	}
+	var result struct {
+		Delay int `json:"delay"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, fmt.Errorf("parse provider node healthcheck: %w", err)
+	}
+	return result.Delay, nil
+}
+
 // RefreshProxyProvider sends PUT /providers/proxies/:name to refresh a native
 // PROXY provider (subscription). The rule-provider endpoint answers 404 for
 // proxy providers, so subscription refresh must use this distinct method.
