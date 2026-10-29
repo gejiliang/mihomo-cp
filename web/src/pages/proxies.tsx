@@ -109,7 +109,22 @@ export default function ProxiesPage() {
   );
 
   const summaries = useMemo(() => providerSummaries(providers), [providers]);
-  const selectedProvider = providers.find((p) => sourceFilter === providerSource(p.name));
+  // Source values are internal (`__all__`, `__static__`, `provider:<name>`).
+  // SelectValue gets the human label explicitly: Base UI only knows item labels
+  // after the menu has been opened once, so the initial/collapsed trigger would
+  // otherwise render the raw value.
+  const providerPrefix = providerSource('');
+  const selectedProviderName = sourceFilter.startsWith(providerPrefix)
+    ? sourceFilter.slice(providerPrefix.length)
+    : '';
+  const selectedProvider = providers.find((p) => p.name === selectedProviderName);
+  const sourceLabel = sourceFilter === STATIC_SOURCE
+    ? t('proxies.sourceStatic')
+    : selectedProviderName
+      ? selectedProvider && selectedProvider.status !== 'ok'
+        ? `${selectedProviderName} · ${t('proxies.unknown')}`
+        : selectedProviderName
+      : t('proxies.sourceAll');
   const hasFilters =
     search.trim() !== '' ||
     protocolFilter !== '' ||
@@ -217,7 +232,7 @@ export default function ProxiesPage() {
           onValueChange={(v) => setSourceFilter(v || ALL_SOURCES)}
         >
           <SelectTrigger className="w-48">
-            <SelectValue placeholder={t('proxies.sourceAll')} />
+            <SelectValue placeholder={t('proxies.sourceAll')}>{sourceLabel}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL_SOURCES}>{t('proxies.sourceAll')}</SelectItem>
