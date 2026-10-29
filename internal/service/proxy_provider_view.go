@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -15,6 +16,9 @@ import (
 // copied out (name/type/alive/udp/last delay). Provider URLs and node
 // credentials (server, port, password, uuid, sni, …) are never read into the
 // view, so they can never leak through the API.
+//
+// mihomo also reports "Compatible" pseudo providers for proxy groups/static
+// config views. They are not subscriptions, so they are filtered out here.
 
 // Provider status values. "unknown" means the provider exists in the running
 // mihomo but did not report a node list (not loaded yet / load failed). It is
@@ -23,6 +27,20 @@ const (
 	ProviderStatusOK      = "ok"
 	ProviderStatusUnknown = "unknown"
 )
+
+// ProviderVehicleCompatible is mihomo's pseudo vehicle type for provider-like
+// views built from proxy groups or the static config. Those entries are not
+// subscriptions and their nodes already appear in the static node list, so
+// they must never be merged into the inventory.
+const ProviderVehicleCompatible = "Compatible"
+
+// isNativeProviderVehicle reports whether a provider is a real native provider
+// (HTTP/File/Inline, …) rather than a Compatible pseudo provider. Everything
+// except Compatible stays included so future native vehicle types still show
+// up; a provider without a node list keeps its unknown status.
+func isNativeProviderVehicle(vehicleType string) bool {
+	return !strings.EqualFold(strings.TrimSpace(vehicleType), ProviderVehicleCompatible)
+}
 
 // ProxyProviderNodeView is one read-only subscription node.
 type ProxyProviderNodeView struct {
@@ -105,12 +123,16 @@ func BuildProxyProviderInventory(raw json.RawMessage) (ProxyProviderInventory, e
 
 	inv := ProxyProviderInventory{Providers: make([]ProxyProviderView, 0, len(names))}
 	for _, name := range names {
-		inv.Providers = append(inv.Providers, buildProxyProviderView(name, envelope.Providers[name]))
+		if view, ok := buildProxyProviderView(name, envelope.Providers[name]); ok {
+			inv.Providers = append(inv.Providers, view)
+		}
 	}
 	return inv, nil
 }
 
-func buildProxyProviderView(key string, raw json.RawMessage) ProxyProviderView {
+// buildProxyProviderView returns ok=false for non-subscription (Compatible)
+// pseudo providers so they never reach the node-management inventory.
+func buildProxyProviderView(key string, raw json.RawMessage) (ProxyProviderView, bool) {
 	view := ProxyProviderView{
 		Name:   key,
 		Status: ProviderStatusUnknown,
@@ -119,7 +141,10 @@ func buildProxyProviderView(key string, raw json.RawMessage) ProxyProviderView {
 
 	var p proxyProviderRaw
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return view
+		return view, true
+	}
+	if !isNativeProviderVehicle(p.VehicleType) {
+		return ProxyProviderView{}, false
 	}
 	if p.Name != "" {
 		view.Name = p.Name
@@ -129,11 +154,11 @@ func buildProxyProviderView(key string, raw json.RawMessage) ProxyProviderView {
 	view.UpdatedAt = normalizeProviderUpdatedAt(p.UpdatedAt)
 
 	if len(p.Proxies) == 0 || bytes.Equal(bytes.TrimSpace(p.Proxies), []byte("null")) {
-		return view
+		return view, true
 	}
 	var raws []json.RawMessage
 	if err := json.Unmarshal(p.Proxies, &raws); err != nil {
-		return view
+		return view, true
 	}
 
 	nodes := make([]ProxyProviderNodeView, 0, len(raws))
@@ -168,7 +193,7 @@ func buildProxyProviderView(key string, raw json.RawMessage) ProxyProviderView {
 	view.NodeCount = &count
 	view.Nodes = nodes
 	view.Status = ProviderStatusOK
-	return view
+	return view, true
 }
 
 // lastPositiveDelay returns the most recent successful delay measurement. A

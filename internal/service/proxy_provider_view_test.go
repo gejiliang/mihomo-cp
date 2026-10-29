@@ -132,6 +132,80 @@ func TestBuildProxyProviderInventoryProjectsSafeMetadataOnly(t *testing.T) {
 	}
 }
 
+func TestBuildProxyProviderInventoryExcludesCompatiblePseudoProviders(t *testing.T) {
+	// mihomo reports "Compatible" pseudo providers for proxy groups/static config
+	// views. They duplicate the static node list and must never be merged into the
+	// subscription inventory, while real providers (HTTP/File/Inline) stay included
+	// and a real provider without a node list keeps its unknown status.
+	raw := json.RawMessage(`{
+	  "providers": {
+	    "Demo Group View": {
+	      "name": "Demo Group View",
+	      "type": "Proxy",
+	      "vehicleType": "Compatible",
+	      "proxies": [{"name": "Demo Static HK 01", "type": "Shadowsocks"}]
+	    },
+	    "Demo Compatible Lower": {
+	      "name": "Demo Compatible Lower",
+	      "type": "Proxy",
+	      "vehicleType": " compatible ",
+	      "proxies": [{"name": "Demo Static JP 02", "type": "VLESS"}]
+	    },
+	    "Demo HTTP Subscription": {
+	      "name": "Demo HTTP Subscription",
+	      "type": "Proxy",
+	      "vehicleType": "HTTP",
+	      "proxies": [{"name": "Demo Subscription HK 01", "type": "AnyTLS"}]
+	    },
+	    "Demo File Subscription": {
+	      "name": "Demo File Subscription",
+	      "type": "Proxy",
+	      "vehicleType": "File",
+	      "proxies": [{"name": "Demo Subscription JP 01", "type": "VMess"}]
+	    },
+	    "Demo Unknown Subscription": {
+	      "name": "Demo Unknown Subscription",
+	      "type": "Proxy",
+	      "vehicleType": "HTTP",
+	      "proxies": null
+	    }
+	  }
+	}`)
+
+	inventory, err := BuildProxyProviderInventory(raw)
+	if err != nil {
+		t.Fatalf("BuildProxyProviderInventory: %v", err)
+	}
+	names := make([]string, 0, len(inventory.Providers))
+	for _, provider := range inventory.Providers {
+		names = append(names, provider.Name)
+		if provider.VehicleType == ProviderVehicleCompatible ||
+			strings.EqualFold(strings.TrimSpace(provider.VehicleType), ProviderVehicleCompatible) {
+			t.Errorf("Compatible pseudo provider %q was included", provider.Name)
+		}
+	}
+	want := []string{
+		"Demo File Subscription",
+		"Demo HTTP Subscription",
+		"Demo Unknown Subscription",
+	}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("providers = %v, want %v", names, want)
+	}
+	for _, provider := range inventory.Providers {
+		for _, node := range provider.Nodes {
+			if strings.HasPrefix(node.Name, "Demo Static ") {
+				t.Errorf("pseudo provider node %q leaked into the inventory", node.Name)
+			}
+		}
+	}
+	// A real provider without nodes is still reported, as unknown (never 0).
+	unknown := inventory.Providers[2]
+	if unknown.Status != ProviderStatusUnknown || unknown.NodeCount != nil || unknown.Nodes != nil {
+		t.Errorf("unknown provider = %#v, want unknown status with nil count/nodes", unknown)
+	}
+}
+
 func TestProviderNodeIDStableAndCollisionFree(t *testing.T) {
 	// Same names under different providers must stay distinct.
 	a := ProviderNodeID("Provider One", "Shared Node")
