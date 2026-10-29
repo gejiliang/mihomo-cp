@@ -85,7 +85,6 @@ func ProviderNodeID(provider, node string) string {
 }
 
 type proxyProviderRaw struct {
-	Name        string          `json:"name"`
 	Type        string          `json:"type"`
 	VehicleType string          `json:"vehicleType"`
 	Proxies     json.RawMessage `json:"proxies"`
@@ -132,6 +131,9 @@ func BuildProxyProviderInventory(raw json.RawMessage) (ProxyProviderInventory, e
 
 // buildProxyProviderView returns ok=false for non-subscription (Compatible)
 // pseudo providers so they never reach the node-management inventory.
+// The view name is always the providers map key: mihomo addresses provider
+// nodes by that key (used for the provider-scoped healthcheck), so it must be
+// preserved even if the inner name field ever differs.
 func buildProxyProviderView(key string, raw json.RawMessage) (ProxyProviderView, bool) {
 	view := ProxyProviderView{
 		Name:   key,
@@ -145,9 +147,6 @@ func buildProxyProviderView(key string, raw json.RawMessage) (ProxyProviderView,
 	}
 	if !isNativeProviderVehicle(p.VehicleType) {
 		return ProxyProviderView{}, false
-	}
-	if p.Name != "" {
-		view.Name = p.Name
 	}
 	view.Type = p.Type
 	view.VehicleType = p.VehicleType

@@ -143,6 +143,7 @@ web/
 | GET    | `/runtime/rules`                  | 运行中的规则              |
 | GET    | `/runtime/providers`              | 运行中的规则集            |
 | GET    | `/runtime/proxy-providers`        | 原生 proxy-providers 订阅节点安全只读清单 |
+| GET    | `/runtime/proxy-providers/{provider}/{node}/healthcheck` | 订阅节点按 provider 定位的延迟测试（仅返回 delay） |
 | GET    | `/settings`                       | 应用设置                  |
 | PUT    | `/settings`                       | 更新应用设置              |
 | GET    | `/settings/config-yaml`           | 获取配置 YAML（草稿或文件）|

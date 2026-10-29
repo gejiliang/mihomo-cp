@@ -143,6 +143,7 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | GET    | `/runtime/rules`                  | Running rules              |
 | GET    | `/runtime/providers`              | Running providers          |
 | GET    | `/runtime/proxy-providers`        | Native proxy-provider (subscription) nodes — safe read-only inventory |
+| GET    | `/runtime/proxy-providers/{provider}/{node}/healthcheck` | Provider-scoped subscription node delay test (only the delay is returned) |
 | GET    | `/settings`                       | App settings               |
 | PUT    | `/settings`                       | Update app settings        |
 | GET    | `/settings/config-yaml`           | Get config YAML (draft or file) |

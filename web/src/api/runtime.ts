@@ -1,5 +1,5 @@
 import { api } from './client';
-import { proxyDelayPath } from '@/lib/proxy-path';
+import { providerHealthcheckPath, proxyDelayPath } from '@/lib/proxy-path';
 
 /** One read-only node of a native mihomo proxy-provider (subscription).
  *
@@ -43,6 +43,17 @@ export const runtimeApi = {
         },
       })
       .json<{ data: any }>(),
+  /** Provider-scoped healthcheck for one subscription node (read-only). Only the
+   * numeric delay is projected by the backend; names are used verbatim. */
+  providerNodeHealthcheck: (provider: string, node: string, url?: string, timeout?: number) =>
+    api
+      .get(providerHealthcheckPath(provider, node), {
+        searchParams: {
+          url: url || 'http://www.gstatic.com/generate_204',
+          timeout: timeout || 5000,
+        },
+      })
+      .json<{ data: { delay: number } }>(),
   switchProxy: (group: string, proxy: string) =>
     api
       .put(`runtime/proxies/${encodeURIComponent(group)}/selected`, { json: { name: proxy } })

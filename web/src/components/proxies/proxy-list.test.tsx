@@ -6,10 +6,13 @@ import type { RuntimeProviderNode, RuntimeProxyProvider } from '@/api/runtime';
 import { buildNodeRows } from '@/lib/node-inventory';
 import { useI18nStore } from '@/i18n';
 
-const { proxyDelay } = vi.hoisted(() => ({ proxyDelay: vi.fn() }));
+const { proxyDelay, providerNodeHealthcheck } = vi.hoisted(() => ({
+  proxyDelay: vi.fn(),
+  providerNodeHealthcheck: vi.fn(),
+}));
 
 vi.mock('@/api/runtime', () => ({
-  runtimeApi: { proxyDelay },
+  runtimeApi: { proxyDelay, providerNodeHealthcheck },
 }));
 
 function staticProxy(overrides: Partial<Proxy> = {}): Proxy {
@@ -88,6 +91,7 @@ describe('ProxyList (unified static + subscription nodes)', () => {
   beforeEach(() => {
     useI18nStore.setState({ locale: 'en' });
     proxyDelay.mockReset();
+    providerNodeHealthcheck.mockReset();
   });
 
   it('shows source labels and protocols for both sources', () => {
@@ -126,8 +130,8 @@ describe('ProxyList (unified static + subscription nodes)', () => {
     expect(onEdit.mock.calls[0][0]).toMatchObject({ id: '11111111-1111-4111-8111-111111111111' });
   });
 
-  it('tests the delay of a subscription node by its real runtime name', async () => {
-    proxyDelay.mockResolvedValue({ data: { delay: 88 } });
+  it('tests a subscription node through the provider-scoped healthcheck with its real name', async () => {
+    providerNodeHealthcheck.mockResolvedValue({ data: { delay: 88 } });
     renderList({
       providers: [provider([providerNode({ name: 'Demo HK / 01 + #1 节点' })])],
     });
@@ -135,10 +139,51 @@ describe('ProxyList (unified static + subscription nodes)', () => {
     const row = rowFor('Demo HK / 01 + #1 节点');
     fireEvent.click(within(row).getByTitle('Test Delay'));
 
-    expect(proxyDelay).toHaveBeenCalledTimes(1);
-    // The actual node name is sent — not the row id, key or provider name.
-    expect(proxyDelay).toHaveBeenCalledWith('Demo HK / 01 + #1 节点');
+    expect(providerNodeHealthcheck).toHaveBeenCalledTimes(1);
+    // Provider + actual node name — not the row id/key, and never the global
+    // /proxies/{name}/delay endpoint.
+    expect(providerNodeHealthcheck).toHaveBeenCalledWith('Demo Provider', 'Demo HK / 01 + #1 节点');
+    expect(proxyDelay).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByText('88ms')).toBeInTheDocument());
+  });
+
+  it('tests a static node through the global runtime delay endpoint', async () => {
+    proxyDelay.mockResolvedValue({ data: { delay: 33 } });
+    renderList();
+
+    fireEvent.click(within(rowFor('Static HK 01')).getByTitle('Test Delay'));
+
+    expect(proxyDelay).toHaveBeenCalledWith('Static HK 01');
+    expect(providerNodeHealthcheck).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText('33ms')).toBeInTheDocument());
+  });
+
+  it('keeps same-named nodes under different providers distinct when testing', async () => {
+    providerNodeHealthcheck.mockResolvedValue({ data: { delay: 50 } });
+    const providers = [
+      provider([providerNode({ id: 'provider/Demo%20Provider/Shared%20Node', name: 'Shared Node' })]),
+      provider(
+        [
+          providerNode({
+            id: 'provider/Other%20Provider/Shared%20Node',
+            name: 'Shared Node',
+            provider: 'Other Provider',
+          }),
+        ],
+        { name: 'Other Provider' }
+      ),
+    ];
+    renderList({ proxies: [], providers });
+
+    const rows = screen.getAllByText('Shared Node').map((cell) => cell.closest('tr') as HTMLElement);
+    expect(rows).toHaveLength(2);
+    fireEvent.click(within(rows[0]).getByTitle('Test Delay'));
+    fireEvent.click(within(rows[1]).getByTitle('Test Delay'));
+
+    expect(providerNodeHealthcheck.mock.calls).toEqual([
+      ['Demo Provider', 'Shared Node'],
+      ['Other Provider', 'Shared Node'],
+    ]);
   });
 
   it('shows only safe metadata in the subscription node details dialog', () => {
@@ -165,8 +210,9 @@ describe('ProxyList (unified static + subscription nodes)', () => {
     expect(text).not.toContain('private-token');
   });
 
-  it('batch delay tests every visible node, subscription nodes included', async () => {
+  it('batch delay tests every visible node with its own delay method', async () => {
     proxyDelay.mockResolvedValue({ data: { delay: 60 } });
+    providerNodeHealthcheck.mockResolvedValue({ data: { delay: 60 } });
     const proxies = [staticProxy()];
     const providers = [provider([providerNode()])];
     const rows = buildNodeRows(proxies, providers);
@@ -183,9 +229,9 @@ describe('ProxyList (unified static + subscription nodes)', () => {
     rerender(<ProxyList {...props} testAllTrigger={1} />);
 
     await waitFor(() => expect(onTestAllDone).toHaveBeenCalledTimes(1));
-    expect(proxyDelay.mock.calls.map((call) => call[0])).toEqual([
-      'Static HK 01',
-      'Demo HK / 01 + #1',
+    expect(proxyDelay.mock.calls.map((call) => call[0])).toEqual(['Static HK 01']);
+    expect(providerNodeHealthcheck.mock.calls).toEqual([
+      ['Demo Provider', 'Demo HK / 01 + #1'],
     ]);
   });
 

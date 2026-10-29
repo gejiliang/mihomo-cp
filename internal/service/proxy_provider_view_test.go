@@ -206,6 +206,23 @@ func TestBuildProxyProviderInventoryExcludesCompatiblePseudoProviders(t *testing
 	}
 }
 
+func TestBuildProxyProviderInventoryUsesProviderKeyAsIdentity(t *testing.T) {
+	// mihomo addresses provider nodes by the providers map key, so the view must
+	// keep the key (not a possibly differing inner display name) for healthchecks.
+	raw := json.RawMessage(`{"providers":{"Provider Key":{"name":"Different Display Name","vehicleType":"HTTP","proxies":[{"name":"Demo Node","type":"AnyTLS"}]}}}`)
+	inventory, err := BuildProxyProviderInventory(raw)
+	if err != nil {
+		t.Fatalf("BuildProxyProviderInventory: %v", err)
+	}
+	provider := inventory.Providers[0]
+	if provider.Name != "Provider Key" {
+		t.Errorf("provider name = %q, want the map key", provider.Name)
+	}
+	if provider.Nodes[0].Provider != "Provider Key" {
+		t.Errorf("node provider = %q, want the map key", provider.Nodes[0].Provider)
+	}
+}
+
 func TestProviderNodeIDStableAndCollisionFree(t *testing.T) {
 	// Same names under different providers must stay distinct.
 	a := ProviderNodeID("Provider One", "Shared Node")

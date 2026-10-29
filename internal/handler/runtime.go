@@ -108,18 +108,47 @@ func (h *RuntimeHandler) Providers(w http.ResponseWriter, r *http.Request) {
 // ProxyProviders handles GET /api/runtime/proxy-providers: the read-only
 // inventory of native proxy-provider (subscription) nodes, projected to safe
 // metadata only (no provider URL, server address or node credential).
+// Upstream errors are replaced by a fixed message: mihomo error bodies can
+// echo the provider URL or other sensitive data.
 func (h *RuntimeHandler) ProxyProviders(w http.ResponseWriter, r *http.Request) {
 	raw, err := h.mihomo.GetProxyProviders()
 	if err != nil {
-		Error(w, 502, "upstream_error", err.Error())
+		Error(w, 502, "upstream_error", "proxy provider inventory unavailable")
 		return
 	}
 	inventory, err := service.BuildProxyProviderInventory(raw)
 	if err != nil {
-		Error(w, 502, "upstream_error", err.Error())
+		Error(w, 502, "upstream_error", "proxy provider inventory unavailable")
 		return
 	}
 	JSON(w, 200, inventory)
+}
+
+// ProxyProviderNodeDelay handles
+// GET /api/runtime/proxy-providers/{provider}/{node}/healthcheck.
+//
+// Provider nodes must be tested through mihomo's provider-scoped healthcheck:
+// the global /proxies/{name}/delay endpoint cannot address the same node name
+// under two different providers. Provider and node arrive as separate
+// path segments (decoded by the router) and are re-escaped for upstream.
+// Only the numeric delay is projected; upstream bodies and errors never pass
+// through.
+func (h *RuntimeHandler) ProxyProviderNodeDelay(w http.ResponseWriter, r *http.Request) {
+	provider := r.PathValue("provider")
+	node := r.PathValue("node")
+	testURL := r.URL.Query().Get("url")
+	timeout := 5000
+	if timeoutStr := r.URL.Query().Get("timeout"); timeoutStr != "" {
+		if t, err := strconv.Atoi(timeoutStr); err == nil {
+			timeout = t
+		}
+	}
+	delay, err := h.mihomo.ProviderNodeHealthcheck(provider, node, testURL, timeout)
+	if err != nil {
+		Error(w, 502, "upstream_error", "proxy provider node healthcheck failed")
+		return
+	}
+	JSON(w, 200, map[string]int{"delay": delay})
 }
 
 // RefreshProvider handles PUT /api/runtime/providers/rules/{name}

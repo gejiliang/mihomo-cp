@@ -102,9 +102,13 @@ export function ProxyList({
   const testOneDelay = async (row: NodeRow) => {
     setDelays((prev) => ({ ...prev, [row.key]: 'testing' }));
     try {
-      // The runtime name is the real node name (subscription nodes included),
-      // never the row id or the provider name.
-      const res = await runtimeApi.proxyDelay(row.name);
+      // Static proxies use the global runtime delay endpoint; subscription nodes
+      // must use mihomo's provider-scoped healthcheck so the same node name under
+      // two providers is addressed unambiguously. Both use the real node name.
+      const res =
+        row.kind === 'provider'
+          ? await runtimeApi.providerNodeHealthcheck(row.providerName, row.name)
+          : await runtimeApi.proxyDelay(row.name);
       const delay = res?.data?.delay;
       if (typeof delay === 'number' && delay > 0) {
         setDelays((prev) => ({ ...prev, [row.key]: delay }));

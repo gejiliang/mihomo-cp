@@ -235,6 +235,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/runtime/rules", protected(s.runtimeHandler.Rules))
 	s.mux.Handle("GET /api/runtime/providers", protected(s.runtimeHandler.Providers))
 	s.mux.Handle("GET /api/runtime/proxy-providers", protected(s.runtimeHandler.ProxyProviders))
+	s.mux.Handle("GET /api/runtime/proxy-providers/{provider}/{node}/healthcheck", protected(s.runtimeHandler.ProxyProviderNodeDelay))
 	s.mux.Handle("PUT /api/runtime/providers/rules/{name}", adminOnly(s.runtimeHandler.RefreshProvider))
 	s.mux.Handle("GET /api/runtime/version", protected(s.runtimeHandler.Version))
 
