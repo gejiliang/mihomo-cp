@@ -3,7 +3,9 @@ package handler_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -223,5 +225,179 @@ func TestNativePrecheckHandlerSlowInboundBody(t *testing.T) {
 	case <-response:
 	case <-time.After(time.Second):
 		t.Fatal("loopback client did not finish")
+	}
+}
+
+// precheckControllerProbe forwards operations to the real server writer,
+// including the Logging wrapper. It never substitutes socket deadline behavior.
+type precheckControllerCall struct {
+	method   string
+	deadline time.Time
+	err      error
+}
+
+type precheckControllerProbe struct {
+	http.ResponseWriter
+	calls         []precheckControllerCall
+	lateOutput    bool
+	writeDeadline time.Time
+}
+
+func (p *precheckControllerProbe) SetReadDeadline(deadline time.Time) error {
+	err := http.NewResponseController(p.ResponseWriter).SetReadDeadline(deadline)
+	p.calls = append(p.calls, precheckControllerCall{"read", deadline, err})
+	return err
+}
+func (p *precheckControllerProbe) SetWriteDeadline(deadline time.Time) error {
+	err := http.NewResponseController(p.ResponseWriter).SetWriteDeadline(deadline)
+	p.calls = append(p.calls, precheckControllerCall{"write", deadline, err})
+	p.writeDeadline = deadline
+	return err
+}
+func (p *precheckControllerProbe) FlushError() error {
+	err := http.NewResponseController(p.ResponseWriter).Flush()
+	p.calls = append(p.calls, precheckControllerCall{method: "flush", err: err})
+	return err
+}
+func (p *precheckControllerProbe) Write(data []byte) (int, error) {
+	if p.lateOutput && !p.writeDeadline.IsZero() {
+		// Hold the small response beyond the actual socket deadline. The handler's
+		// deferred Flush must enforce the deadline despite net/http buffering.
+		time.Sleep(time.Until(p.writeDeadline) + 20*time.Millisecond)
+	}
+	return p.ResponseWriter.Write(data)
+}
+
+func assertPrecheckControllerCalls(t *testing.T, calls []precheckControllerCall, late bool) {
+	t.Helper()
+	read, write, flush := false, false, false
+	var activeWrite time.Time
+	for _, call := range calls {
+		if call.method == "flush" {
+			flush = true
+			if activeWrite.IsZero() {
+				t.Error("Flush executed after write deadline reset")
+			}
+			if late {
+				var timeout net.Error
+				if !errors.As(call.err, &timeout) || !timeout.Timeout() {
+					t.Errorf("late Flush did not hit socket timeout: %v", call.err)
+				}
+			} else if call.err != nil {
+				t.Errorf("Flush not forwarded: %v", call.err)
+			}
+			continue
+		}
+		if call.err != nil {
+			t.Errorf("%s deadline not forwarded: %v", call.method, call.err)
+		}
+		if call.method == "read" && !call.deadline.IsZero() {
+			read = true
+		}
+		if call.method == "write" {
+			activeWrite = call.deadline
+			if !call.deadline.IsZero() {
+				write = true
+			}
+		}
+	}
+	if !read || !write || !flush {
+		t.Fatalf("incomplete controller forwarding: %+v", calls)
+	}
+}
+
+func TestNativePrecheckLoggingDeadlinesAndFlush(t *testing.T) {
+	upstream, _ := precheckUpstream(t)
+	h := handler.NewNativePrecheckHandler(service.NewNativePrecheckService(service.NewMihomoClient(upstream.URL, precheckSecret)))
+	auth := service.NewAuthService("synthetic-logging-jwt", 1, 1)
+	token, err := auth.GenerateAccessToken("fake", "readonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"normal", "slow-body", "late-output"} {
+		t.Run(mode, func(t *testing.T) {
+			reports := make(chan []precheckControllerCall, 1)
+			entered := make(chan struct{})
+			mux := http.NewServeMux()
+			mux.Handle("POST /api/runtime/native-precheck", middleware.Auth(auth)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// An earlier incoming deadline keeps the slow-body test short while
+				// exercising the handler's unchanged local total-deadline selection.
+				ctx, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+				defer cancel()
+				probe := &precheckControllerProbe{ResponseWriter: w, lateOutput: mode == "late-output"}
+				close(entered)
+				h.Check(probe, r.WithContext(ctx))
+				reports <- probe.calls
+			})))
+			srv := httptest.NewServer(middleware.Logging(mux))
+			defer srv.Close()
+			var body io.Reader = strings.NewReader(precheckRequest)
+			var pipeWriter *io.PipeWriter
+			if mode == "slow-body" {
+				reader, writer := io.Pipe()
+				defer reader.Close()
+				defer writer.Close()
+				body = reader
+				pipeWriter = writer
+			}
+			req, err := http.NewRequest("POST", srv.URL+"/api/runtime/native-precheck", body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Second}
+			defer client.CloseIdleConnections()
+			type response struct {
+				status int
+				body   string
+				err    error
+			}
+			responses := make(chan response, 1)
+			go func() {
+				resp, err := client.Do(req)
+				if err != nil {
+					responses <- response{err: err}
+					return
+				}
+				defer resp.Body.Close()
+				data, err := io.ReadAll(io.LimitReader(resp.Body, (16<<10)+1))
+				responses <- response{resp.StatusCode, string(data), err}
+			}()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("authenticated handler not entered")
+			}
+			var calls []precheckControllerCall
+			select {
+			case calls = <-reports:
+			case <-time.After(time.Second):
+				// Release the synthetic sender on failure so cleanup cannot hang.
+				if pipeWriter != nil {
+					pipeWriter.Close()
+				}
+				t.Fatal("Logging chain failed to bound handler completion")
+			}
+			if pipeWriter != nil {
+				pipeWriter.Close()
+			}
+			var result response
+			select {
+			case result = <-responses:
+			case <-time.After(time.Second):
+				t.Fatal("loopback client did not finish")
+			}
+			assertPrecheckControllerCalls(t, calls, mode != "normal")
+			if mode == "normal" {
+				if result.err != nil || result.status != 200 || !strings.Contains(result.body, `"status":"NOT_BOUND"`) {
+					t.Fatalf("normal Logging response failed: %+v", result)
+				}
+			} else if strings.Contains(result.body, "NOT_BOUND") {
+				t.Fatal("late output escaped expired socket deadline")
+			}
+			if len(result.body) > 16<<10 || strings.Contains(result.body, precheckSecret) {
+				t.Fatal("unsafe Logging response")
+			}
+		})
 	}
 }
