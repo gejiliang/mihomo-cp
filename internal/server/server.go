@@ -35,6 +35,7 @@ type Server struct {
 	systemConfigHandler *handler.SystemConfigHandler
 	publishHandler      *handler.PublishHandler
 	runtimeHandler      *handler.RuntimeHandler
+	precheckHandler     *handler.NativePrecheckHandler
 	importHandler       *handler.ImportHandler
 	settingsHandler     *handler.SettingsHandler
 	trafficHandler      *handler.TrafficHandler
@@ -107,6 +108,7 @@ func New(cfg Config, db *store.DB) *Server {
 		configSvc, validator, publishSvc, importSvc,
 	)
 	runtimeHandler := handler.NewRuntimeHandler(mihomoClient)
+	precheckHandler := handler.NewNativePrecheckHandler(service.NewNativePrecheckService(mihomoClient))
 	trafficHandler := handler.NewTrafficHandler(trafficSvc, trafficStore, notifySvc)
 	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionSvc)
 	scoresHandler := handler.NewScoresHandler(nodeScoreStore, scoringSvc)
@@ -127,6 +129,7 @@ func New(cfg Config, db *store.DB) *Server {
 		systemConfigHandler: systemConfigHandler,
 		publishHandler:      publishHandler,
 		runtimeHandler:      runtimeHandler,
+		precheckHandler:     precheckHandler,
 		importHandler:       importHandler,
 		settingsHandler:     settingsHandler,
 		trafficHandler:      trafficHandler,
@@ -227,6 +230,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/publish/status", protected(s.publishHandler.Status))
 
 	// ── Runtime (proxy to mihomo) ─────────────────────────────────────────────
+	s.mux.Handle("POST /api/runtime/native-precheck", protected(s.precheckHandler.Check))
 	s.mux.Handle("GET /api/runtime/connections", protected(s.runtimeHandler.Connections))
 	s.mux.Handle("DELETE /api/runtime/connections/{id}", adminOnly(s.runtimeHandler.CloseConnection))
 	s.mux.Handle("GET /api/runtime/proxies", protected(s.runtimeHandler.Proxies))
