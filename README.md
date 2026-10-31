@@ -138,6 +138,7 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | POST   | `/publish/discard`                | Discard draft changes      |
 | POST   | `/publish/rollback`               | Rollback to last success   |
 | GET    | `/publish/history`                | Publish history            |
+| POST   | `/runtime/native-precheck`         | Bounded non-secret runtime fragments; currently NOT_BOUND |
 | GET    | `/runtime/connections`            | Live connections           |
 | GET    | `/runtime/proxies`                | Running proxy status       |
 | GET    | `/runtime/rules`                  | Running rules              |
@@ -164,6 +165,46 @@ All endpoints are prefixed with `/api/`. Authentication required unless noted.
 | POST   | `/node-scores/refresh`            | Queue batch re-score `{ids}` or `{all}` (admin only) |
 
 See [docs/subscription-score-api.md](docs/subscription-score-api.md) for the full subscription & scoring contract, including the operator-configurable egress isolation settings (`isolation_interface`, `isolation_dns`).
+
+### Native precheck projection
+
+`POST /api/runtime/native-precheck` uses the existing access JWT and the
+server's existing MihomoClient. It is read-only and accepts exactly:
+
+```json
+{"operation":"native-precheck","child_context":"child-1","peers":["192.0.2.1"],"budget_ms":1000}
+```
+
+`child_context` is a 1–64 character ASCII identifier (letters, digits, `_`, `-`).
+`peers` is the caller's claimed complete set of 1–256 unique canonical IPv4
+addresses; it is unverified input. `budget_ms` is an integer from 1 to 20000.
+Unknown, repeated, case-variant, null or malformed fields, trailing JSON and
+query parameters are rejected. No target, controller, URL, path, credentials
+or trusted evidence can be supplied by the caller.
+
+The getter reads only fixed `GET /rules` and then `GET /connections`, without
+redirects, retries or fallback. Each response is capped at 64 KiB, input and
+output at 16 KiB. One local deadline covers request reading, parsing, both
+controller reads and output: the earlier of incoming cancellation/deadline,
+the remaining supplied budget and 20 seconds. This is not proof of a cross-host
+20-second deadline. Errors contain only fixed codes/messages (`invalid_request`,
+`deadline_exceeded`, `source_unavailable`), never upstream bodies or errors.
+
+A successful read returns `data.status: "NOT_BOUND"`, `data.fragments` with
+fixed method/projection version and numeric `rule_count`/`connection_count`,
+and `data.facts` with each value explicitly `"UNKNOWN"`: `target_binding`,
+`child_context_binding`, `complete_peer_binding`, `dns_no_fake_ip`,
+`effective_policy`, `proxy_exclusion`, `source_version`,
+`observed_at`, `valid_until`, and `loaded_association`. Only counts are projected;
+rule payloads, chains and nested metadata are never returned. Empty connections
+and a raw DIRECT rule do not prove exclusion or native routing.
+
+**Actual DNS/noFakeIP, effective policy, proxy exclusion, loaded provenance and
+the trusted business target/context/complete-peer binding are not connected.**
+The normal service therefore always remains NOT_BOUND; it has no qualification
+or caller-supplied trusted-source mechanism. Fake controller tests verify only
+this bounded projection and failure behavior, not actual routing. Existing raw
+runtime endpoints retain their existing behavior.
 
 ## License
 
