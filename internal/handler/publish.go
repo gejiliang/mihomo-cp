@@ -317,7 +317,7 @@ func (h *PublishHandler) Discard(w http.ResponseWriter, r *http.Request) {
 		Error(w, 500, "internal", "failed to render draft: "+err.Error())
 		return
 	}
-	if err := os.WriteFile(st.MihomoConfig, yamlBytes, 0644); err != nil {
+	if err := service.WriteConfigFile(st.MihomoConfig, yamlBytes); err != nil {
 		Error(w, 500, "internal", "failed to write config file: "+err.Error())
 		return
 	}

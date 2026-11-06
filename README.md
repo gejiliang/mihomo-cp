@@ -77,6 +77,25 @@ After login, go to **Settings** and configure:
 | Controller URL       | mihomo external controller endpoint  | `http://127.0.0.1:9090`   |
 | Controller Secret    | API secret for mihomo controller     | `your-secret`              |
 
+### Config file permissions
+
+Publish, automatic recovery, rollback and discard replace the configured YAML
+atomically with mode `0600`; existing Unix owner/group are retained. Validation
+also writes its temporary config with `0600`. Existing broader permissions are
+removed on the next successful write. A failed write leaves the previous file
+untouched. Config paths must be regular files (symlinks are rejected), and the
+control plane needs write/execute access to the containing directory. A failed
+first publish removes the newly created file; recovery failures are recorded in
+publish history.
+
+Run mihomo as the config owner (or with appropriate privileged access); a separate
+unprivileged account cannot read an owner-only file. Before rollout, check both
+service identities, directory access and existing config ownership. After a test
+publish/discard/rollback, verify `stat -c '%a %U %G' /path/to/config.yaml` reports
+`600` and the intended owner/group, and verify reload under the actual mihomo
+service identity. Tests use local fake controllers and do not establish access
+for a deployed service.
+
 ### Docker
 
 ```bash

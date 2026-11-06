@@ -54,7 +54,7 @@ func (s *PublishService) ValidateWithMihomo(yamlContent []byte, mihomoDir, mihom
 	defer os.RemoveAll(tmpDir)
 
 	configFile := filepath.Join(tmpDir, "config.yaml")
-	if err := os.WriteFile(configFile, yamlContent, 0o644); err != nil {
+	if err := WriteConfigFile(configFile, yamlContent); err != nil {
 		return "", fmt.Errorf("write temp config: %w", err)
 	}
 
@@ -155,25 +155,36 @@ func (s *PublishService) Publish(req PublishRequest) (*model.PublishRecord, erro
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read current config: %w", err)
 	}
+	hadConfig := err == nil
 
 	// Generate diff
 	record.DiffText = generateDiff(string(currentContent), string(req.ConfigYAML))
 
 	// Write new config
-	if err := os.WriteFile(req.ConfigPath, req.ConfigYAML, 0o644); err != nil {
+	if err := WriteConfigFile(req.ConfigPath, req.ConfigYAML); err != nil {
 		return nil, fmt.Errorf("write new config: %w", err)
 	}
 
 	// Reload mihomo — pass the config file path, not directory
 	reloadErr := s.mihomo.ReloadConfig(req.ConfigPath)
 	if reloadErr != nil {
-		// Restore backup
-		if len(currentContent) > 0 {
-			_ = os.WriteFile(req.ConfigPath, currentContent, 0o644)
-			_ = s.mihomo.ReloadConfig(req.ConfigDir)
-		}
 		record.Status = "failed"
 		record.ErrorMsg = reloadErr.Error()
+		// An empty existing file is still a backup; a failed first publish
+		// must restore absence rather than leave the rejected config behind.
+		var restoreErr error
+		if hadConfig {
+			restoreErr = WriteConfigFile(req.ConfigPath, currentContent)
+		} else {
+			restoreErr = os.Remove(req.ConfigPath)
+		}
+		if restoreErr != nil {
+			record.ErrorMsg += fmt.Sprintf("; restore config: %v", restoreErr)
+		} else if hadConfig {
+			if err := s.mihomo.ReloadConfig(req.ConfigPath); err != nil {
+				record.ErrorMsg += fmt.Sprintf("; reload restored config: %v", err)
+			}
+		}
 	} else {
 		record.Status = "success"
 	}
